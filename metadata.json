@@ -1,0 +1,6 @@
+{
+  "name": "Agenda Pimpinan - Manajemen Kegiatan & Kalender",
+  "description": "Aplikasi manajemen agenda pimpinan bulanan dengan pengingat otomatis, sinkronisasi kalender pengguna, dan unggah dokumen pendukung PDF atau gambar.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
