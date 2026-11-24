@@ -2,7 +2,7 @@ import React from 'react';
 import { 
   Calendar as CalendarIcon, ListOrdered, BarChart3, Printer, 
   Plus, Bell, BellRing, Download, Volume2, Sparkles, Shield,
-  BookOpen, ShieldCheck
+  BookOpen, ShieldCheck, RefreshCw
 } from 'lucide-react';
 import { ViewMode } from '../types/agenda';
 import { playExecutiveChime } from '../utils/audioAlarm';
@@ -19,6 +19,8 @@ interface HeaderProps {
   totalAgendasThisMonth: number;
   totalJournalsThisMonth: number;
   totalDutiesThisMonth: number;
+  onManualSync: () => void;
+  isSyncing: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -32,7 +34,9 @@ export const Header: React.FC<HeaderProps> = ({
   selectedYear,
   totalAgendasThisMonth,
   totalJournalsThisMonth,
-  totalDutiesThisMonth
+  totalDutiesThisMonth,
+  onManualSync,
+  isSyncing
 }) => {
   return (
     <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-40 shadow-lg no-print">
@@ -84,6 +88,17 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
+          {/* Manual Live Data Sync Button */}
+          <button
+            onClick={onManualSync}
+            disabled={isSyncing}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-200 border border-slate-700 text-xs font-medium transition"
+            title="Sinkronkan ulang data live dengan aplikasi sekarang"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-teal-400 ${isSyncing ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">{isSyncing ? 'Menyinkronkan...' : 'Sinkronkan Data'}</span>
+          </button>
+
           {/* Sync All Month's Agendas to Calendar (.ICS) */}
           <button
             onClick={onExportMonthIcs}
@@ -91,8 +106,8 @@ export const Header: React.FC<HeaderProps> = ({
             title={`Unduh seluruh agenda ${selectedMonthName} ${selectedYear} ke kalender`}
           >
             <Download className="w-3.5 h-3.5 text-blue-400" />
-            <span className="hidden sm:inline">Sinkronkan Bulan Ini (.ics)</span>
-            <span className="sm:hidden">Kalender</span>
+            <span className="hidden sm:inline">Kalender (.ics)</span>
+            <span className="sm:hidden">.ICS</span>
           </button>
 
           {/* Add Agenda Button */}

@@ -7,9 +7,15 @@ import { INITIAL_AGENDAS } from './data/initialAgendas';
 import { INITIAL_JOURNALS, INITIAL_HOLIDAY_DUTIES } from './data/initialJournalAndDuty';
 import { 
   getAllAgendasFromDB, saveAgendasToDB, saveSingleAgendaToDB, deleteAgendaFromDB,
-  getAllJournalsFromDB, saveJournalsToDB, deleteJournalFromDB,
-  getAllHolidayDutiesFromDB, saveHolidayDutiesToDB, deleteHolidayDutyFromDB
+  getAllJournalsFromDB, saveJournalsToDB, saveSingleJournalToDB, deleteJournalFromDB,
+  getAllHolidayDutiesFromDB, saveHolidayDutiesToDB, saveSingleHolidayDutyToDB, deleteHolidayDutyFromDB
 } from './utils/indexedDb';
+import {
+  fetchLiveState, mergeLocalWithLive, subscribeLiveUpdates,
+  syncAgendaUpsert, syncAgendaDelete,
+  syncJournalUpsert, syncJournalDelete,
+  syncDutyUpsert, syncDutyBatch, syncDutyDelete
+} from './utils/liveSync';
 import { 
   getNotificationPermission, requestNotificationPermission, 
   sendDesktopNotification, checkAgendaAlert, ActiveAlert 
@@ -40,6 +46,7 @@ export default function App() {
   const [journals, setJournals] = useState<DailyJournalEntry[]>([]);
   const [holidayDuties, setHolidayDuties] = useState<HolidayDutyEntry[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Selected date navigation (Defaults to current date: Nov 2026)
   const today = useMemo(() => new Date(), []);
@@ -69,48 +76,127 @@ export default function App() {
     leader: ''
   });
 
-  // Load Agendas, Journals, and Holiday Duties from IndexedDB on initial mount
+  // Helper to apply authoritative live snapshot to React state + IndexedDB cache
+  const applyLiveSnapshot = async (snapshot: {
+    agendas: AgendaItem[];
+    journals: DailyJournalEntry[];
+    holidayDuties: HolidayDutyEntry[];
+  }) => {
+    setAgendas(snapshot.agendas);
+    setJournals(snapshot.journals);
+    setHolidayDuties(snapshot.holidayDuties);
+    await Promise.all([
+      saveAgendasToDB(snapshot.agendas),
+      saveJournalsToDB(snapshot.journals),
+      saveHolidayDutiesToDB(snapshot.holidayDuties)
+    ]);
+  };
+
+  // Load initial data from Live Server (merging any offline local records) and subscribe to real-time SSE updates
   useEffect(() => {
-    async function initData() {
+    let active = true;
+
+    async function initLiveSync() {
+      let localAgendas: AgendaItem[] = [];
+      let localJournals: DailyJournalEntry[] = [];
+      let localDuties: HolidayDutyEntry[] = [];
+
       try {
-        const [storedAgendas, storedJournals, storedDuties] = await Promise.all([
+        [localAgendas, localJournals, localDuties] = await Promise.all([
           getAllAgendasFromDB(),
           getAllJournalsFromDB(),
           getAllHolidayDutiesFromDB()
         ]);
-
-        if (storedAgendas && storedAgendas.length > 0) {
-          setAgendas(storedAgendas);
-        } else {
-          setAgendas(INITIAL_AGENDAS);
-          await saveAgendasToDB(INITIAL_AGENDAS);
-        }
-
-        if (storedJournals && storedJournals.length > 0) {
-          setJournals(storedJournals);
-        } else {
-          setJournals(INITIAL_JOURNALS);
-          await saveJournalsToDB(INITIAL_JOURNALS);
-        }
-
-        if (storedDuties && storedDuties.length > 0) {
-          setHolidayDuties(storedDuties);
-        } else {
-          setHolidayDuties(INITIAL_HOLIDAY_DUTIES);
-          await saveHolidayDutiesToDB(INITIAL_HOLIDAY_DUTIES);
-        }
       } catch (err) {
-        console.error('Database load error:', err);
-        setAgendas(INITIAL_AGENDAS);
-        setJournals(INITIAL_JOURNALS);
-        setHolidayDuties(INITIAL_HOLIDAY_DUTIES);
+        console.warn('IndexedDB read warning:', err);
+      }
+
+      try {
+        const hasLocalData =
+          localAgendas.length > 0 || localJournals.length > 0 || localDuties.length > 0;
+        const liveData = hasLocalData
+          ? await mergeLocalWithLive({
+              agendas: localAgendas,
+              journals: localJournals,
+              holidayDuties: localDuties
+            })
+          : await fetchLiveState();
+
+        if (!active) return;
+        await applyLiveSnapshot(liveData);
+      } catch (err) {
+        console.warn('Gagal menghubungi server live, menggunakan cache lokal:', err);
+        if (!active) return;
+        setAgendas(localAgendas.length > 0 ? localAgendas : INITIAL_AGENDAS);
+        setJournals(localJournals.length > 0 ? localJournals : INITIAL_JOURNALS);
+        setHolidayDuties(localDuties.length > 0 ? localDuties : INITIAL_HOLIDAY_DUTIES);
       } finally {
-        setIsLoaded(true);
+        if (active) setIsLoaded(true);
       }
     }
 
-    initData();
+    initLiveSync();
     setNotificationPermission(getNotificationPermission());
+
+    const unsubscribe = subscribeLiveUpdates({
+      onAgendaUpsert: (item) => {
+        setAgendas((prev) => {
+          const exists = prev.some((a) => a.id === item.id);
+          return exists ? prev.map((a) => (a.id === item.id ? item : a)) : [item, ...prev];
+        });
+        saveSingleAgendaToDB(item);
+      },
+      onAgendaDelete: (id) => {
+        setAgendas((prev) => prev.filter((a) => a.id !== id));
+        deleteAgendaFromDB(id);
+      },
+      onJournalUpsert: (item) => {
+        setJournals((prev) => {
+          const exists = prev.some((j) => j.id === item.id);
+          return exists ? prev.map((j) => (j.id === item.id ? item : j)) : [item, ...prev];
+        });
+        saveSingleJournalToDB(item);
+      },
+      onJournalDelete: (id) => {
+        setJournals((prev) => prev.filter((j) => j.id !== id));
+        deleteJournalFromDB(id);
+      },
+      onDutyUpsert: (item) => {
+        setHolidayDuties((prev) => {
+          const exists = prev.some((d) => d.id === item.id);
+          return exists ? prev.map((d) => (d.id === item.id ? item : d)) : [...prev, item];
+        });
+        saveSingleHolidayDutyToDB(item);
+      },
+      onDutyBatch: (items) => {
+        setHolidayDuties((prev) => {
+          const map = new Map(prev.map((d) => [d.id, d]));
+          items.forEach((d) => map.set(d.id, d));
+          const merged = Array.from(map.values());
+          saveHolidayDutiesToDB(merged);
+          return merged;
+        });
+      },
+      onDutyDelete: (id) => {
+        setHolidayDuties((prev) => prev.filter((d) => d.id !== id));
+        deleteHolidayDutyFromDB(id);
+      },
+      onFullSync: (state) => {
+        applyLiveSnapshot(state);
+      },
+      onReconnect: () => {
+        fetchLiveState()
+          .then((state) => {
+            if (active) applyLiveSnapshot(state);
+          })
+          .catch(() => {});
+      }
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, []);
 
   // Background reminder periodic checker (Runs every 10 seconds)
@@ -217,33 +303,67 @@ export default function App() {
     return { total, vip, completed, upcoming };
   }, [monthAgendas]);
 
-  // Handlers
+  // Manual Live Sync trigger
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    try {
+      const liveData = await mergeLocalWithLive({
+        agendas,
+        journals,
+        holidayDuties
+      });
+      await applyLiveSnapshot(liveData);
+    } catch (err) {
+      console.error('Gagal menyinkronkan data live:', err);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Handlers (optimistic update + authoritative live server sync)
   const handleSaveAgenda = async (savedItem: AgendaItem) => {
     const index = agendas.findIndex((a) => a.id === savedItem.id);
-    let updated: AgendaItem[];
-    if (index >= 0) {
-      updated = [...agendas];
-      updated[index] = savedItem;
-    } else {
-      updated = [savedItem, ...agendas];
-    }
+    const updated =
+      index >= 0
+        ? agendas.map((a) => (a.id === savedItem.id ? savedItem : a))
+        : [savedItem, ...agendas];
     setAgendas(updated);
-    await saveAgendasToDB(updated);
+    await saveSingleAgendaToDB(savedItem);
     setIsModalOpen(false);
     setAgendaToEdit(null);
+
+    try {
+      await syncAgendaUpsert(savedItem);
+    } catch (err) {
+      console.error('Live agenda sync error:', err);
+    }
   };
 
   const handleDeleteAgenda = async (id: string) => {
-    const updated = agendas.filter((a) => a.id !== id);
-    setAgendas(updated);
+    setAgendas((prev) => prev.filter((a) => a.id !== id));
     await deleteAgendaFromDB(id);
+    try {
+      await syncAgendaDelete(id);
+    } catch (err) {
+      console.error('Live agenda delete sync error:', err);
+    }
   };
 
   const handleStatusChange = async (id: string, newStatus: AgendaStatus) => {
-    const updated = agendas.map((a) => (a.id === id ? { ...a, status: newStatus } : a));
-    setAgendas(updated);
-    const target = updated.find((a) => a.id === id);
-    if (target) await saveSingleAgendaToDB(target);
+    const target = agendas.find((a) => a.id === id);
+    if (!target) return;
+    const updatedItem: AgendaItem = {
+      ...target,
+      status: newStatus,
+      updatedAt: new Date().toISOString()
+    };
+    setAgendas((prev) => prev.map((a) => (a.id === id ? updatedItem : a)));
+    await saveSingleAgendaToDB(updatedItem);
+    try {
+      await syncAgendaUpsert(updatedItem);
+    } catch (err) {
+      console.error('Live status sync error:', err);
+    }
   };
 
   const handleSnooze = (agendaId: string, minutes: number) => {
@@ -253,7 +373,10 @@ export default function App() {
     );
     setAgendas(updated);
     const target = updated.find((a) => a.id === agendaId);
-    if (target) saveSingleAgendaToDB(target);
+    if (target) {
+      saveSingleAgendaToDB(target);
+      syncAgendaUpsert(target).catch(() => {});
+    }
     setActiveAlerts((prev) => prev.filter((item) => item.agenda.id !== agendaId));
   };
 
@@ -290,13 +413,22 @@ export default function App() {
         ? journals.map((j) => (j.id === entry.id ? entry : j))
         : [entry, ...journals];
     setJournals(updated);
-    await saveJournalsToDB(updated);
+    await saveSingleJournalToDB(entry);
+    try {
+      await syncJournalUpsert(entry);
+    } catch (err) {
+      console.error('Live journal sync error:', err);
+    }
   };
 
   const handleDeleteJournal = async (id: string) => {
-    const updated = journals.filter((j) => j.id !== id);
-    setJournals(updated);
+    setJournals((prev) => prev.filter((j) => j.id !== id));
     await deleteJournalFromDB(id);
+    try {
+      await syncJournalDelete(id);
+    } catch (err) {
+      console.error('Live journal delete sync error:', err);
+    }
   };
 
   // Holiday Duty handlers
@@ -307,19 +439,33 @@ export default function App() {
         ? holidayDuties.map((d) => (d.id === duty.id ? duty : d))
         : [...holidayDuties, duty];
     setHolidayDuties(updated);
-    await saveHolidayDutiesToDB(updated);
+    await saveSingleHolidayDutyToDB(duty);
+    try {
+      await syncDutyUpsert(duty);
+    } catch (err) {
+      console.error('Live duty sync error:', err);
+    }
   };
 
   const handleBatchAddHolidayDuties = async (newDuties: HolidayDutyEntry[]) => {
     const updated = [...holidayDuties, ...newDuties];
     setHolidayDuties(updated);
     await saveHolidayDutiesToDB(updated);
+    try {
+      await syncDutyBatch(newDuties);
+    } catch (err) {
+      console.error('Live duty batch sync error:', err);
+    }
   };
 
   const handleDeleteHolidayDuty = async (id: string) => {
-    const updated = holidayDuties.filter((d) => d.id !== id);
-    setHolidayDuties(updated);
+    setHolidayDuties((prev) => prev.filter((d) => d.id !== id));
     await deleteHolidayDutyFromDB(id);
+    try {
+      await syncDutyDelete(id);
+    } catch (err) {
+      console.error('Live duty delete sync error:', err);
+    }
   };
 
   return (
@@ -348,6 +494,8 @@ export default function App() {
         totalAgendasThisMonth={stats.total}
         totalJournalsThisMonth={monthJournals.length}
         totalDutiesThisMonth={monthHolidayDuties.length}
+        onManualSync={handleManualSync}
+        isSyncing={isSyncing}
       />
 
       {/* Main App Content Container */}
