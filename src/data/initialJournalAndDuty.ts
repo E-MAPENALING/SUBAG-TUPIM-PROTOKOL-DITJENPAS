@@ -1,4 +1,4 @@
-import { DailyJournalEntry, HolidayDutyEntry } from '../types/agenda';
+import type { DailyJournalEntry, HolidayDutyEntry } from '../types/agenda.ts';
 
 export const INITIAL_JOURNALS: DailyJournalEntry[] = [
   {

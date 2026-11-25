@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, MapPin, User, Paperclip, 
   Share2, Download, ExternalLink, Shirt, Edit2, Trash2, 
@@ -24,6 +24,7 @@ export const AgendaListView: React.FC<AgendaListViewProps> = ({
   onPreviewDocument,
   onAddNew
 }) => {
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const todayStr = new Date().toISOString().slice(0, 10);
 
   // Group agendas by date
@@ -335,26 +336,48 @@ export const AgendaListView: React.FC<AgendaListViewProps> = ({
 
                         {/* Edit & Delete row */}
                         <div className="flex items-center gap-2 pt-1 w-full justify-between">
-                          <button
-                            onClick={() => onEditAgenda(item)}
-                            className="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-lg text-xs font-medium border border-slate-200 transition"
-                            title="Ubah Agenda"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                            <span>Ubah</span>
-                          </button>
+                          {confirmDeleteId === item.id ? (
+                            <div className="flex items-center gap-1.5 w-full">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onDeleteAgenda(item.id);
+                                  setConfirmDeleteId(null);
+                                }}
+                                className="flex-1 px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold transition"
+                              >
+                                Hapus
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(null)}
+                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-medium transition"
+                              >
+                                Batal
+                              </button>
+                            </div>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => onEditAgenda(item)}
+                                className="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-lg text-xs font-medium border border-slate-200 transition"
+                                title="Ubah Agenda"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                                <span>Ubah</span>
+                              </button>
 
-                          <button
-                            onClick={() => {
-                              if (window.confirm(`Yakin ingin menghapus agenda "${item.title}"?`)) {
-                                onDeleteAgenda(item.id);
-                              }
-                            }}
-                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-                            title="Hapus Agenda"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(item.id)}
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+                                title="Hapus Agenda"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>

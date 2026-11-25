@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Printer, ArrowLeft, Download, Shield } from 'lucide-react';
+import { Printer, ArrowLeft, Download, Shield, FileDown, Loader2 } from 'lucide-react';
 import { AgendaItem, DailyJournalEntry, HolidayDutyEntry } from '../types/agenda';
 import { formatDateIndo, downloadMonthlyIcsFile } from '../utils/calendarSync';
+import { downloadMonthlyReportPdf } from '../utils/pdfExport';
 
 interface OfficialPrintViewProps {
   agendas: AgendaItem[];
@@ -22,6 +23,7 @@ export const OfficialPrintView: React.FC<OfficialPrintViewProps> = ({
 }) => {
   const [includePiket, setIncludePiket] = useState(true);
   const [includeJournal, setIncludeJournal] = useState(true);
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
 
   // Sort agendas by date and start time
   const sortedAgendas = [...agendas].sort((a, b) =>
@@ -35,6 +37,25 @@ export const OfficialPrintView: React.FC<OfficialPrintViewProps> = ({
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleDownloadPdf = () => {
+    setIsDownloadingPdf(true);
+    try {
+      downloadMonthlyReportPdf({
+        agendas: sortedAgendas,
+        journals: sortedJournals,
+        holidayDuties: sortedDuties,
+        selectedMonthName,
+        selectedYear,
+        includePiket,
+        includeJournal
+      });
+    } catch (err) {
+      console.error('Gagal membuat PDF laporan bulanan:', err);
+    } finally {
+      setTimeout(() => setIsDownloadingPdf(false), 300);
+    }
   };
 
   return (
@@ -70,21 +91,34 @@ export const OfficialPrintView: React.FC<OfficialPrintViewProps> = ({
           </label>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => downloadMonthlyIcsFile(agendas, selectedMonthName, selectedYear)}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-semibold shadow-xs transition"
+            className="inline-flex items-center gap-2 px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-semibold shadow-xs transition"
           >
             <Download className="w-4 h-4" />
             <span>Ekspor Kalender (.ics)</span>
           </button>
 
           <button
+            onClick={handleDownloadPdf}
+            disabled={isDownloadingPdf}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md transition"
+          >
+            {isDownloadingPdf ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <FileDown className="w-4 h-4" />
+            )}
+            <span>{isDownloadingPdf ? 'Menyiapkan PDF...' : 'Download Laporan Bulanan'}</span>
+          </button>
+
+          <button
             onClick={handlePrint}
-            className="inline-flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md transition"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-md transition"
           >
             <Printer className="w-4 h-4" />
-            <span>Cetak / Simpan PDF Lembar Agenda</span>
+            <span>Cetak Lembar</span>
           </button>
         </div>
       </div>

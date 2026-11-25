@@ -10,6 +10,7 @@ interface AgendaModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (agenda: AgendaItem) => void;
+  onDelete?: (agendaId: string) => void;
   agendaToEdit?: AgendaItem | null;
   initialDate?: string;
 }
@@ -61,10 +62,12 @@ export const AgendaModal: React.FC<AgendaModalProps> = ({
   isOpen,
   onClose,
   onSave,
+  onDelete,
   agendaToEdit,
   initialDate
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const [title, setTitle] = useState(agendaToEdit?.title || '');
   const [category, setCategory] = useState<AgendaCategory>(agendaToEdit?.category || 'Rapat Koordinasi');
@@ -116,7 +119,7 @@ export const AgendaModal: React.FC<AgendaModalProps> = ({
                       /\.(pdf|png|jpe?g|webp|svg)$/i.test(file.name);
 
       if (!isValid) {
-        alert(`Format berkas "${file.name}" tidak didukung. Mohon unggah dokumen PDF atau gambar (PNG, JPG, WEBP).`);
+        setFormError(`Format berkas "${file.name}" tidak didukung. Mohon unggah dokumen PDF atau gambar (PNG, JPG, WEBP).`);
         processedCount++;
         if (processedCount === files.length) setIsUploading(false);
         return;
@@ -124,7 +127,7 @@ export const AgendaModal: React.FC<AgendaModalProps> = ({
 
       // Max size: 25MB per file
       if (file.size > 25 * 1024 * 1024) {
-        alert(`Ukuran berkas "${file.name}" terlalu besar (${(file.size / (1024 * 1024)).toFixed(1)} MB). Maksimal 25 MB.`);
+        setFormError(`Ukuran berkas "${file.name}" terlalu besar (${(file.size / (1024 * 1024)).toFixed(1)} MB). Maksimal 25 MB.`);
         processedCount++;
         if (processedCount === files.length) setIsUploading(false);
         return;
@@ -132,12 +135,17 @@ export const AgendaModal: React.FC<AgendaModalProps> = ({
 
       const reader = new FileReader();
       reader.onload = () => {
-        const dataUrl = reader.result as string;
+        const inferredType =
+          file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png');
+        let dataUrl = reader.result as string;
+        if (dataUrl.startsWith('data:application/octet-stream;') || dataUrl.startsWith('data:;')) {
+          dataUrl = dataUrl.replace(/^data:[^;]*;/, `data:${inferredType};`);
+        }
         newDocs.push({
-          id: `doc-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
           name: file.name,
           size: file.size,
-          type: file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png'),
+          type: inferredType,
           dataUrl,
           uploadedAt: new Date().toISOString()
         });
@@ -641,21 +649,56 @@ export const AgendaModal: React.FC<AgendaModalProps> = ({
           </div>
 
           {/* Form Actions */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition"
-            >
-              Batal
-            </button>
-            <button
-              type="submit"
-              className="px-6 py-2.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-md hover:shadow-lg transition flex items-center gap-2"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              {agendaToEdit ? 'Simpan Perubahan' : 'Jadwalkan Agenda'}
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-100">
+            <div>
+              {agendaToEdit && onDelete && (
+                confirmDelete ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-red-700">Hapus agenda ini?</span>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(agendaToEdit.id)}
+                      className="px-3.5 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition"
+                    >
+                      Ya, Hapus
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDelete(false)}
+                      className="px-3 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(true)}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 rounded-xl border border-red-200 transition"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Hapus Agenda</span>
+                  </button>
+                )
+              )}
+            </div>
+
+            <div className="flex items-center gap-3 ml-auto">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                className="px-6 py-2.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-md hover:shadow-lg transition flex items-center gap-2"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                {agendaToEdit ? 'Simpan Perubahan' : 'Jadwalkan Agenda'}
+              </button>
+            </div>
           </div>
         </form>
       </div>

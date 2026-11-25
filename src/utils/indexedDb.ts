@@ -1,10 +1,27 @@
 import { AgendaItem, DailyJournalEntry, HolidayDutyEntry } from '../types/agenda';
 
 const DB_NAME = 'AgendaPimpinanDB';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_AGENDAS = 'agendas';
 const STORE_JOURNALS = 'journals';
 const STORE_HOLIDAY_DUTIES = 'holiday_duties';
+const STORE_PENDING_OPS = 'pending_ops';
+
+export interface StoredPendingOp {
+  opId?: number;
+  type:
+    | 'agenda:upsert'
+    | 'agenda:delete'
+    | 'journal:upsert'
+    | 'journal:delete'
+    | 'duty:upsert'
+    | 'duty:batch'
+    | 'duty:delete';
+  item?: AgendaItem | DailyJournalEntry | HolidayDutyEntry;
+  items?: HolidayDutyEntry[];
+  id?: string;
+  ts: number;
+}
 
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -25,6 +42,9 @@ function openDatabase(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_HOLIDAY_DUTIES)) {
         db.createObjectStore(STORE_HOLIDAY_DUTIES, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_PENDING_OPS)) {
+        db.createObjectStore(STORE_PENDING_OPS, { keyPath: 'opId', autoIncrement: true });
       }
     };
 
@@ -273,5 +293,60 @@ export async function deleteHolidayDutyFromDB(id: string): Promise<void> {
     });
   } catch (error) {
     console.error('Gagal menghapus piket hari libur dari IndexedDB:', error);
+  }
+}
+
+// ==================== PENDING SYNC QUEUE (SUPPORTS LARGE ATTACHMENTS) ====================
+
+export async function getAllPendingOpsFromDB(): Promise<StoredPendingOp[]> {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_PENDING_OPS, 'readonly');
+      const store = tx.objectStore(STORE_PENDING_OPS);
+      const request = store.getAll();
+
+      request.onsuccess = () => {
+        const items = (request.result || []) as StoredPendingOp[];
+        items.sort((a, b) => (a.opId || 0) - (b.opId || 0));
+        resolve(items);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  } catch (error) {
+    console.warn('Gagal membaca antrean sinkronisasi dari IndexedDB:', error);
+    return [];
+  }
+}
+
+export async function addPendingOpToDB(op: Omit<StoredPendingOp, 'opId'>): Promise<void> {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_PENDING_OPS, 'readwrite');
+      const store = tx.objectStore(STORE_PENDING_OPS);
+      store.add(op);
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (error) {
+    console.error('Gagal menambahkan antrean sinkronisasi ke IndexedDB:', error);
+  }
+}
+
+export async function deletePendingOpFromDB(opId: number): Promise<void> {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_PENDING_OPS, 'readwrite');
+      const store = tx.objectStore(STORE_PENDING_OPS);
+      store.delete(opId);
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (error) {
+    console.error('Gagal menghapus antrean sinkronisasi dari IndexedDB:', error);
   }
 }

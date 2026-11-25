@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   AgendaItem, ViewMode, FilterState, DocumentAttachment, 
   AgendaCategory, LeaderRole, AgendaStatus, DailyJournalEntry, HolidayDutyEntry 
@@ -11,7 +11,7 @@ import {
   getAllHolidayDutiesFromDB, saveHolidayDutiesToDB, saveSingleHolidayDutyToDB, deleteHolidayDutyFromDB
 } from './utils/indexedDb';
 import {
-  fetchLiveState, mergeLocalWithLive, subscribeLiveUpdates,
+  fetchLiveState, mergeLiveState, flushPendingOps, enqueuePendingOp, subscribeLiveUpdates,
   syncAgendaUpsert, syncAgendaDelete,
   syncJournalUpsert, syncJournalDelete,
   syncDutyUpsert, syncDutyBatch, syncDutyDelete
@@ -76,60 +76,118 @@ export default function App() {
     leader: ''
   });
 
+  const serverVersionRef = useRef<number>(0);
+  const triggeredReminderIdsRef = useRef<Set<string>>(new Set());
+
   // Helper to apply authoritative live snapshot to React state + IndexedDB cache
-  const applyLiveSnapshot = async (snapshot: {
+  const applyLiveSnapshot = useCallback(async (snapshot: {
+    version?: number;
     agendas: AgendaItem[];
     journals: DailyJournalEntry[];
     holidayDuties: HolidayDutyEntry[];
   }) => {
+    if (typeof snapshot.version === 'number') {
+      serverVersionRef.current = snapshot.version;
+    }
     setAgendas(snapshot.agendas);
     setJournals(snapshot.journals);
     setHolidayDuties(snapshot.holidayDuties);
+    try {
+      localStorage.setItem('subag_tu_pim_synced_v2', '1');
+    } catch {
+      // ignore storage errors
+    }
     await Promise.all([
       saveAgendasToDB(snapshot.agendas),
       saveJournalsToDB(snapshot.journals),
       saveHolidayDutiesToDB(snapshot.holidayDuties)
     ]);
-  };
+  }, []);
 
-  // Load initial data from Live Server (merging any offline local records) and subscribe to real-time SSE updates
+  // Load initial data from Live Server (authoritative source of truth) and subscribe to real-time updates
   useEffect(() => {
     let active = true;
 
-    async function initLiveSync() {
-      let localAgendas: AgendaItem[] = [];
-      let localJournals: DailyJournalEntry[] = [];
-      let localDuties: HolidayDutyEntry[] = [];
+    async function pullAuthoritativeState(reconcileLocalOnFirstSync = false) {
+      await flushPendingOps();
 
-      try {
-        [localAgendas, localJournals, localDuties] = await Promise.all([
-          getAllAgendasFromDB(),
-          getAllJournalsFromDB(),
-          getAllHolidayDutiesFromDB()
-        ]);
-      } catch (err) {
-        console.warn('IndexedDB read warning:', err);
-      }
+      if (reconcileLocalOnFirstSync) {
+        const hasSyncedBefore = (() => {
+          try {
+            return localStorage.getItem('subag_tu_pim_synced_v2') === '1';
+          } catch {
+            return false;
+          }
+        })();
 
-      try {
-        const hasLocalData =
-          localAgendas.length > 0 || localJournals.length > 0 || localDuties.length > 0;
-        const liveData = hasLocalData
-          ? await mergeLocalWithLive({
+        if (!hasSyncedBefore) {
+          let localAgendas: AgendaItem[] = [];
+          let localJournals: DailyJournalEntry[] = [];
+          let localDuties: HolidayDutyEntry[] = [];
+          try {
+            [localAgendas, localJournals, localDuties] = await Promise.all([
+              getAllAgendasFromDB(),
+              getAllJournalsFromDB(),
+              getAllHolidayDutiesFromDB()
+            ]);
+          } catch {
+            // ignore IndexedDB read errors
+          }
+
+          if (localAgendas.length > 0 || localJournals.length > 0 || localDuties.length > 0) {
+            const merged = await mergeLiveState({
               agendas: localAgendas,
               journals: localJournals,
               holidayDuties: localDuties
-            })
-          : await fetchLiveState();
+            });
+            if (!active) return;
+            await applyLiveSnapshot(merged);
+            return;
+          }
+        }
+      }
 
-        if (!active) return;
-        await applyLiveSnapshot(liveData);
+      const liveData = await fetchLiveState();
+      if (!active) return;
+      await applyLiveSnapshot(liveData);
+    }
+
+    async function initLiveSync() {
+      try {
+        await pullAuthoritativeState(true);
       } catch (err) {
         console.warn('Gagal menghubungi server live, menggunakan cache lokal:', err);
         if (!active) return;
-        setAgendas(localAgendas.length > 0 ? localAgendas : INITIAL_AGENDAS);
-        setJournals(localJournals.length > 0 ? localJournals : INITIAL_JOURNALS);
-        setHolidayDuties(localDuties.length > 0 ? localDuties : INITIAL_HOLIDAY_DUTIES);
+        let localAgendas: AgendaItem[] = [];
+        let localJournals: DailyJournalEntry[] = [];
+        let localDuties: HolidayDutyEntry[] = [];
+        try {
+          [localAgendas, localJournals, localDuties] = await Promise.all([
+            getAllAgendasFromDB(),
+            getAllJournalsFromDB(),
+            getAllHolidayDutiesFromDB()
+          ]);
+        } catch {
+          // ignore IndexedDB errors
+        }
+        const hasSyncedBefore = (() => {
+          try {
+            return localStorage.getItem('subag_tu_pim_synced_v2') === '1';
+          } catch {
+            return false;
+          }
+        })();
+
+        // Never resurrect deleted dummy items if this browser has already synced before
+        if (hasSyncedBefore || localAgendas.length > 0 || localJournals.length > 0 || localDuties.length > 0) {
+          setAgendas(localAgendas);
+          setJournals(localJournals);
+          setHolidayDuties(localDuties);
+        } else {
+          setAgendas(INITIAL_AGENDAS);
+          setJournals(INITIAL_JOURNALS);
+          setHolidayDuties(INITIAL_HOLIDAY_DUTIES);
+        }
       } finally {
         if (active) setIsLoaded(true);
       }
@@ -138,66 +196,72 @@ export default function App() {
     initLiveSync();
     setNotificationPermission(getNotificationPermission());
 
-    const unsubscribe = subscribeLiveUpdates({
-      onAgendaUpsert: (item) => {
-        setAgendas((prev) => {
-          const exists = prev.some((a) => a.id === item.id);
-          return exists ? prev.map((a) => (a.id === item.id ? item : a)) : [item, ...prev];
-        });
-        saveSingleAgendaToDB(item);
+    const unsubscribe = subscribeLiveUpdates(
+      {
+        onAgendaUpsert: (item, version) => {
+          if (typeof version === 'number') serverVersionRef.current = version;
+          setAgendas((prev) => {
+            const exists = prev.some((a) => a.id === item.id);
+            return exists ? prev.map((a) => (a.id === item.id ? item : a)) : [item, ...prev];
+          });
+          saveSingleAgendaToDB(item);
+        },
+        onAgendaDelete: (id, version) => {
+          if (typeof version === 'number') serverVersionRef.current = version;
+          setAgendas((prev) => prev.filter((a) => a.id !== id));
+          deleteAgendaFromDB(id);
+        },
+        onJournalUpsert: (item, version) => {
+          if (typeof version === 'number') serverVersionRef.current = version;
+          setJournals((prev) => {
+            const exists = prev.some((j) => j.id === item.id);
+            return exists ? prev.map((j) => (j.id === item.id ? item : j)) : [item, ...prev];
+          });
+          saveSingleJournalToDB(item);
+        },
+        onJournalDelete: (id, version) => {
+          if (typeof version === 'number') serverVersionRef.current = version;
+          setJournals((prev) => prev.filter((j) => j.id !== id));
+          deleteJournalFromDB(id);
+        },
+        onDutyUpsert: (item, version) => {
+          if (typeof version === 'number') serverVersionRef.current = version;
+          setHolidayDuties((prev) => {
+            const exists = prev.some((d) => d.id === item.id);
+            return exists ? prev.map((d) => (d.id === item.id ? item : d)) : [...prev, item];
+          });
+          saveSingleHolidayDutyToDB(item);
+        },
+        onDutyBatch: (items, version) => {
+          if (typeof version === 'number') serverVersionRef.current = version;
+          setHolidayDuties((prev) => {
+            const map = new Map(prev.map((d) => [d.id, d]));
+            items.forEach((d) => map.set(d.id, d));
+            const merged = Array.from(map.values());
+            saveHolidayDutiesToDB(merged);
+            return merged;
+          });
+        },
+        onDutyDelete: (id, version) => {
+          if (typeof version === 'number') serverVersionRef.current = version;
+          setHolidayDuties((prev) => prev.filter((d) => d.id !== id));
+          deleteHolidayDutyFromDB(id);
+        },
+        onFullSync: (state) => {
+          applyLiveSnapshot(state);
+        },
+        onServerVersionChanged: () => {
+          pullAuthoritativeState().catch(() => {});
+        }
       },
-      onAgendaDelete: (id) => {
-        setAgendas((prev) => prev.filter((a) => a.id !== id));
-        deleteAgendaFromDB(id);
-      },
-      onJournalUpsert: (item) => {
-        setJournals((prev) => {
-          const exists = prev.some((j) => j.id === item.id);
-          return exists ? prev.map((j) => (j.id === item.id ? item : j)) : [item, ...prev];
-        });
-        saveSingleJournalToDB(item);
-      },
-      onJournalDelete: (id) => {
-        setJournals((prev) => prev.filter((j) => j.id !== id));
-        deleteJournalFromDB(id);
-      },
-      onDutyUpsert: (item) => {
-        setHolidayDuties((prev) => {
-          const exists = prev.some((d) => d.id === item.id);
-          return exists ? prev.map((d) => (d.id === item.id ? item : d)) : [...prev, item];
-        });
-        saveSingleHolidayDutyToDB(item);
-      },
-      onDutyBatch: (items) => {
-        setHolidayDuties((prev) => {
-          const map = new Map(prev.map((d) => [d.id, d]));
-          items.forEach((d) => map.set(d.id, d));
-          const merged = Array.from(map.values());
-          saveHolidayDutiesToDB(merged);
-          return merged;
-        });
-      },
-      onDutyDelete: (id) => {
-        setHolidayDuties((prev) => prev.filter((d) => d.id !== id));
-        deleteHolidayDutyFromDB(id);
-      },
-      onFullSync: (state) => {
-        applyLiveSnapshot(state);
-      },
-      onReconnect: () => {
-        fetchLiveState()
-          .then((state) => {
-            if (active) applyLiveSnapshot(state);
-          })
-          .catch(() => {});
-      }
-    });
+      () => serverVersionRef.current
+    );
 
     return () => {
       active = false;
       unsubscribe();
     };
-  }, []);
+  }, [applyLiveSnapshot]);
 
   // Background reminder periodic checker (Runs every 10 seconds)
   useEffect(() => {
@@ -214,12 +278,18 @@ export default function App() {
         if (alert) {
           currentActive.push(alert);
 
-          // If sound is enabled and not already notified this minute
-          if (agenda.reminder.soundEnabled && !agenda.reminder.triggered) {
+          // If sound is enabled and not already notified for this session
+          const triggerKey = `${agenda.id}:${agenda.date}:${agenda.startTime}`;
+          if (
+            agenda.reminder.soundEnabled &&
+            !agenda.reminder.triggered &&
+            !triggeredReminderIdsRef.current.has(triggerKey)
+          ) {
+            triggeredReminderIdsRef.current.add(triggerKey);
             playExecutiveChime();
             sendDesktopNotification(agenda);
 
-            // Mark as triggered so it doesn't repeatedly ring every 10s
+            // Mark as triggered locally so it doesn't repeatedly ring every 10s
             const updatedAgenda = {
               ...agenda,
               reminder: { ...agenda.reminder, triggered: true, lastNotified: now.toISOString() }
@@ -303,15 +373,12 @@ export default function App() {
     return { total, vip, completed, upcoming };
   }, [monthAgendas]);
 
-  // Manual Live Sync trigger
+  // Manual Live Sync trigger: flush offline queue then pull exact authoritative online state
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
-      const liveData = await mergeLocalWithLive({
-        agendas,
-        journals,
-        holidayDuties
-      });
+      await flushPendingOps();
+      const liveData = await fetchLiveState();
       await applyLiveSnapshot(liveData);
     } catch (err) {
       console.error('Gagal menyinkronkan data live:', err);
@@ -320,22 +387,24 @@ export default function App() {
     }
   };
 
-  // Handlers (optimistic update + authoritative live server sync)
+  // Handlers (optimistic update + authoritative live server sync + IndexedDB offline queue fallback)
   const handleSaveAgenda = async (savedItem: AgendaItem) => {
-    const index = agendas.findIndex((a) => a.id === savedItem.id);
-    const updated =
-      index >= 0
-        ? agendas.map((a) => (a.id === savedItem.id ? savedItem : a))
-        : [savedItem, ...agendas];
-    setAgendas(updated);
+    setAgendas((prev) => {
+      const exists = prev.some((a) => a.id === savedItem.id);
+      return exists ? prev.map((a) => (a.id === savedItem.id ? savedItem : a)) : [savedItem, ...prev];
+    });
     await saveSingleAgendaToDB(savedItem);
     setIsModalOpen(false);
     setAgendaToEdit(null);
 
     try {
-      await syncAgendaUpsert(savedItem);
+      const { item: canonical, version } = await syncAgendaUpsert(savedItem);
+      if (typeof version === 'number') serverVersionRef.current = version;
+      setAgendas((prev) => prev.map((a) => (a.id === canonical.id ? canonical : a)));
+      await saveSingleAgendaToDB(canonical);
     } catch (err) {
-      console.error('Live agenda sync error:', err);
+      console.error('Live agenda sync error, queued for retry:', err);
+      await enqueuePendingOp({ type: 'agenda:upsert', item: savedItem, ts: Date.now() });
     }
   };
 
@@ -343,9 +412,11 @@ export default function App() {
     setAgendas((prev) => prev.filter((a) => a.id !== id));
     await deleteAgendaFromDB(id);
     try {
-      await syncAgendaDelete(id);
+      const ver = await syncAgendaDelete(id);
+      if (typeof ver === 'number') serverVersionRef.current = ver;
     } catch (err) {
-      console.error('Live agenda delete sync error:', err);
+      console.error('Live agenda delete sync error, queued for retry:', err);
+      await enqueuePendingOp({ type: 'agenda:delete', id, ts: Date.now() });
     }
   };
 
@@ -360,9 +431,13 @@ export default function App() {
     setAgendas((prev) => prev.map((a) => (a.id === id ? updatedItem : a)));
     await saveSingleAgendaToDB(updatedItem);
     try {
-      await syncAgendaUpsert(updatedItem);
+      const { item: canonical, version } = await syncAgendaUpsert(updatedItem);
+      if (typeof version === 'number') serverVersionRef.current = version;
+      setAgendas((prev) => prev.map((a) => (a.id === canonical.id ? canonical : a)));
+      await saveSingleAgendaToDB(canonical);
     } catch (err) {
-      console.error('Live status sync error:', err);
+      console.error('Live status sync error, queued for retry:', err);
+      await enqueuePendingOp({ type: 'agenda:upsert', item: updatedItem, ts: Date.now() });
     }
   };
 
@@ -375,7 +450,15 @@ export default function App() {
     const target = updated.find((a) => a.id === agendaId);
     if (target) {
       saveSingleAgendaToDB(target);
-      syncAgendaUpsert(target).catch(() => {});
+      syncAgendaUpsert(target)
+        .then(({ item: canonical, version }) => {
+          if (typeof version === 'number') serverVersionRef.current = version;
+          setAgendas((prev) => prev.map((a) => (a.id === canonical.id ? canonical : a)));
+          saveSingleAgendaToDB(canonical);
+        })
+        .catch(() => {
+          enqueuePendingOp({ type: 'agenda:upsert', item: target, ts: Date.now() });
+        });
     }
     setActiveAlerts((prev) => prev.filter((item) => item.agenda.id !== agendaId));
   };
@@ -407,17 +490,19 @@ export default function App() {
 
   // Daily Journal handlers
   const handleSaveJournal = async (entry: DailyJournalEntry) => {
-    const idx = journals.findIndex((j) => j.id === entry.id);
-    const updated =
-      idx >= 0
-        ? journals.map((j) => (j.id === entry.id ? entry : j))
-        : [entry, ...journals];
-    setJournals(updated);
+    setJournals((prev) => {
+      const exists = prev.some((j) => j.id === entry.id);
+      return exists ? prev.map((j) => (j.id === entry.id ? entry : j)) : [entry, ...prev];
+    });
     await saveSingleJournalToDB(entry);
     try {
-      await syncJournalUpsert(entry);
+      const { item: canonical, version } = await syncJournalUpsert(entry);
+      if (typeof version === 'number') serverVersionRef.current = version;
+      setJournals((prev) => prev.map((j) => (j.id === canonical.id ? canonical : j)));
+      await saveSingleJournalToDB(canonical);
     } catch (err) {
-      console.error('Live journal sync error:', err);
+      console.error('Live journal sync error, queued for retry:', err);
+      await enqueuePendingOp({ type: 'journal:upsert', item: entry, ts: Date.now() });
     }
   };
 
@@ -425,25 +510,29 @@ export default function App() {
     setJournals((prev) => prev.filter((j) => j.id !== id));
     await deleteJournalFromDB(id);
     try {
-      await syncJournalDelete(id);
+      const ver = await syncJournalDelete(id);
+      if (typeof ver === 'number') serverVersionRef.current = ver;
     } catch (err) {
-      console.error('Live journal delete sync error:', err);
+      console.error('Live journal delete sync error, queued for retry:', err);
+      await enqueuePendingOp({ type: 'journal:delete', id, ts: Date.now() });
     }
   };
 
   // Holiday Duty handlers
   const handleSaveHolidayDuty = async (duty: HolidayDutyEntry) => {
-    const idx = holidayDuties.findIndex((d) => d.id === duty.id);
-    const updated =
-      idx >= 0
-        ? holidayDuties.map((d) => (d.id === duty.id ? duty : d))
-        : [...holidayDuties, duty];
-    setHolidayDuties(updated);
+    setHolidayDuties((prev) => {
+      const exists = prev.some((d) => d.id === duty.id);
+      return exists ? prev.map((d) => (d.id === duty.id ? duty : d)) : [...prev, duty];
+    });
     await saveSingleHolidayDutyToDB(duty);
     try {
-      await syncDutyUpsert(duty);
+      const { item: canonical, version } = await syncDutyUpsert(duty);
+      if (typeof version === 'number') serverVersionRef.current = version;
+      setHolidayDuties((prev) => prev.map((d) => (d.id === canonical.id ? canonical : d)));
+      await saveSingleHolidayDutyToDB(canonical);
     } catch (err) {
-      console.error('Live duty sync error:', err);
+      console.error('Live duty sync error, queued for retry:', err);
+      await enqueuePendingOp({ type: 'duty:upsert', item: duty, ts: Date.now() });
     }
   };
 
@@ -452,9 +541,20 @@ export default function App() {
     setHolidayDuties(updated);
     await saveHolidayDutiesToDB(updated);
     try {
-      await syncDutyBatch(newDuties);
+      const { items: canonicalAdded, version } = await syncDutyBatch(newDuties);
+      if (typeof version === 'number') serverVersionRef.current = version;
+      if (canonicalAdded.length > 0) {
+        setHolidayDuties((prev) => {
+          const map = new Map(prev.map((d) => [d.id, d]));
+          canonicalAdded.forEach((d) => map.set(d.id, d));
+          const merged = Array.from(map.values());
+          saveHolidayDutiesToDB(merged);
+          return merged;
+        });
+      }
     } catch (err) {
-      console.error('Live duty batch sync error:', err);
+      console.error('Live duty batch sync error, queued for retry:', err);
+      await enqueuePendingOp({ type: 'duty:batch', items: newDuties, ts: Date.now() });
     }
   };
 
@@ -462,9 +562,11 @@ export default function App() {
     setHolidayDuties((prev) => prev.filter((d) => d.id !== id));
     await deleteHolidayDutyFromDB(id);
     try {
-      await syncDutyDelete(id);
+      const ver = await syncDutyDelete(id);
+      if (typeof ver === 'number') serverVersionRef.current = ver;
     } catch (err) {
-      console.error('Live duty delete sync error:', err);
+      console.error('Live duty delete sync error, queued for retry:', err);
+      await enqueuePendingOp({ type: 'duty:delete', id, ts: Date.now() });
     }
   };
 
@@ -615,6 +717,11 @@ export default function App() {
             setAgendaToEdit(null);
           }}
           onSave={handleSaveAgenda}
+          onDelete={(id) => {
+            handleDeleteAgenda(id);
+            setIsModalOpen(false);
+            setAgendaToEdit(null);
+          }}
           agendaToEdit={agendaToEdit}
           initialDate={targetDateForNew}
         />

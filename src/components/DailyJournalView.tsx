@@ -191,12 +191,18 @@ export const DailyJournalView: React.FC<DailyJournalViewProps> = ({
 
       const reader = new FileReader();
       reader.onload = () => {
+        const inferredType =
+          file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png');
+        let dataUrl = reader.result as string;
+        if (dataUrl.startsWith('data:application/octet-stream;') || dataUrl.startsWith('data:;')) {
+          dataUrl = dataUrl.replace(/^data:[^;]*;/, `data:${inferredType};`);
+        }
         newDocs.push({
           id: `jdoc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           name: file.name,
           size: file.size,
-          type: file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png'),
-          dataUrl: reader.result as string,
+          type: inferredType,
+          dataUrl,
           uploadedAt: new Date().toISOString()
         });
         processed++;
