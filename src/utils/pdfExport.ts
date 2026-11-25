@@ -407,46 +407,6 @@ export function downloadMonthlyReportPdf({
     currentY = (doc.lastAutoTable?.finalY ?? currentY) + 10;
   }
 
-  // ==================== OFFICIAL SIGNATURES BLOCK ====================
-  const signatureBlockHeight = 42;
-  if (currentY + signatureBlockHeight > pageHeight - 16) {
-    doc.addPage();
-    currentY = 22;
-  }
-
-  const leftColX = marginX + contentWidth * 0.24;
-  const rightColX = marginX + contentWidth * 0.76;
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(15, 23, 42);
-  doc.text('Mengetahui,', leftColX, currentY, { align: 'center' });
-  doc.text(`Ditetapkan di Tempat, ${todayFormatted}`, rightColX, currentY, { align: 'center' });
-
-  doc.setFont('helvetica', 'bold');
-  doc.text('SEKRETARIS DAERAH / PERUSAHAAN', leftColX, currentY + 5, { align: 'center' });
-  doc.text('KASUBAG TU PIMPINAN & PROTOKOL DITJENPAS', rightColX, currentY + 5, { align: 'center' });
-
-  // Signature name lines
-  const signNameY = currentY + 28;
-  const leftName = 'IR. HENDRO WICAKSONO, M.T.';
-  const rightName = 'M. RIDWAN PRASETYO, S.STP., M.AP';
-
-  doc.text(leftName, leftColX, signNameY, { align: 'center' });
-  doc.text(rightName, rightColX, signNameY, { align: 'center' });
-
-  doc.setLineWidth(0.3);
-  const leftNameW = doc.getTextWidth(leftName);
-  const rightNameW = doc.getTextWidth(rightName);
-  doc.line(leftColX - leftNameW / 2, signNameY + 0.9, leftColX + leftNameW / 2, signNameY + 0.9);
-  doc.line(rightColX - rightNameW / 2, signNameY + 0.9, rightColX + rightNameW / 2, signNameY + 0.9);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.setTextColor(71, 85, 105);
-  doc.text('NIP. 19740512 199803 1 002', leftColX, signNameY + 4.8, { align: 'center' });
-  doc.text('NIP. 19820815 200412 1 001', rightColX, signNameY + 4.8, { align: 'center' });
-
   // ==================== PAGE FOOTERS ====================
   const totalPages = doc.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {

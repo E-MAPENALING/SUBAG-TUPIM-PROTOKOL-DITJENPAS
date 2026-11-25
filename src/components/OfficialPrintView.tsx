@@ -335,30 +335,6 @@ export const OfficialPrintView: React.FC<OfficialPrintViewProps> = ({
           </div>
         )}
 
-        {/* Official Signatures Section */}
-        <div className="mt-12 pt-6 grid grid-cols-2 text-center text-xs text-slate-900 break-inside-avoid">
-          <div>
-            <p className="font-medium">Mengetahui,</p>
-            <p className="font-bold uppercase mt-1">Sekretaris Daerah / Perusahaan</p>
-            <div className="h-20 flex items-center justify-center">
-              <span className="text-slate-300 italic text-[11px]">[Tanda Tangan & Cap Resmi]</span>
-            </div>
-            <p className="font-bold underline uppercase">Ir. Hendro Wicaksono, M.T.</p>
-            <p className="text-[11px] text-slate-600">NIP. 19740512 199803 1 002</p>
-          </div>
-
-          <div>
-            <p className="font-medium">
-              Ditetapkan di Tempat, {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
-            </p>
-            <p className="font-bold uppercase mt-1">Kasubag TU Pimpinan &amp; Protokol Ditjenpas</p>
-            <div className="h-20 flex items-center justify-center">
-              <span className="text-slate-300 italic text-[11px]">[Tanda Tangan & Cap Resmi]</span>
-            </div>
-            <p className="font-bold underline uppercase">M. Ridwan Prasetyo, S.STP., M.AP</p>
-            <p className="text-[11px] text-slate-600">NIP. 19820815 200412 1 001</p>
-          </div>
-        </div>
       </div>
     </div>
   );
