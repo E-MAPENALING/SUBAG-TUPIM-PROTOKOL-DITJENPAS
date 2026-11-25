@@ -1,6 +1,8 @@
 import express from 'express';
 import type { Request, Response } from 'express';
 import fs from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type {
   AgendaItem,
@@ -28,8 +30,48 @@ interface LiveStoreData {
 }
 
 const PORT = Number(process.env.PORT) || 3000;
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const DATA_FILE = path.resolve(DATA_DIR, 'live-store.json');
+const PRIMARY_DATA_DIR = path.resolve(process.cwd(), 'data');
+const PRIMARY_DATA_FILE = path.resolve(PRIMARY_DATA_DIR, 'live-store.json');
+const FALLBACK_DATA_DIR = path.join(os.tmpdir(), 'subag-tu-pim-live-data');
+
+let activeDataDir = PRIMARY_DATA_DIR;
+let activeDataFile = PRIMARY_DATA_FILE;
+
+async function resolveWritableDataFile(): Promise<string> {
+  try {
+    await fs.mkdir(PRIMARY_DATA_DIR, { recursive: true });
+    await fs.access(PRIMARY_DATA_DIR, fsConstants.W_OK);
+    // If file exists, verify it is also writable
+    try {
+      await fs.access(PRIMARY_DATA_FILE, fsConstants.F_OK);
+      await fs.access(PRIMARY_DATA_FILE, fsConstants.W_OK);
+    } catch (fileErr: unknown) {
+      const code = (fileErr as NodeJS.ErrnoException)?.code;
+      if (code && code !== 'ENOENT') {
+        throw fileErr;
+      }
+    }
+    activeDataDir = PRIMARY_DATA_DIR;
+    activeDataFile = PRIMARY_DATA_FILE;
+    return activeDataFile;
+  } catch {
+    await fs.mkdir(FALLBACK_DATA_DIR, { recursive: true });
+    activeDataDir = FALLBACK_DATA_DIR;
+    activeDataFile = path.join(FALLBACK_DATA_DIR, 'live-store.json');
+    // Seed fallback from primary file if readable and fallback doesn't exist yet
+    try {
+      await fs.access(activeDataFile, fsConstants.F_OK);
+    } catch {
+      try {
+        const primaryRaw = await fs.readFile(PRIMARY_DATA_FILE, 'utf-8');
+        await fs.writeFile(activeDataFile, primaryRaw, 'utf-8');
+      } catch {
+        // primary file not present or unreadable; loadStoreFromDisk will initialize
+      }
+    }
+    return activeDataFile;
+  }
+}
 
 const SAFE_ID_REGEX = /^[a-zA-Z0-9_-]{1,120}$/;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -277,9 +319,14 @@ function validateHolidayDutyPayload(
   };
 }
 
+function computeSyncToken(): string {
+  return `${store.version}:${store.updatedAt}:${store.agendas.length}:${store.journals.length}:${store.holidayDuties.length}`;
+}
+
 function getPublicState() {
   return {
     version: store.version,
+    syncToken: computeSyncToken(),
     agendas: store.agendas,
     journals: store.journals,
     holidayDuties: store.holidayDuties,
@@ -288,9 +335,9 @@ function getPublicState() {
 }
 
 async function loadStoreFromDisk(): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
+  const dataFile = await resolveWritableDataFile();
   try {
-    const raw = await fs.readFile(DATA_FILE, 'utf-8');
+    const raw = await fs.readFile(dataFile, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<LiveStoreData>;
     const rawDeleted: Record<string, unknown> = isRecord(parsed.deletedIds) ? parsed.deletedIds : {};
     const isLegacyStore = typeof parsed.version !== 'number' && !isRecord(parsed.deletedIds);
@@ -365,13 +412,13 @@ function persistStoreToDisk(): Promise<void> {
   store.version += 1;
   store.updatedAt = new Date().toISOString();
   const payload = JSON.stringify(store);
-  const tmpFile = `${DATA_FILE}.tmp`;
+  const tmpFile = `${activeDataFile}.tmp`;
 
   writeQueue = writeQueue
     .then(async () => {
-      await fs.mkdir(DATA_DIR, { recursive: true });
+      await fs.mkdir(activeDataDir, { recursive: true });
       await fs.writeFile(tmpFile, payload, 'utf-8');
-      await fs.rename(tmpFile, DATA_FILE);
+      await fs.rename(tmpFile, activeDataFile);
     })
     .catch((err) => {
       console.error('Failed to persist live store:', err);
@@ -404,15 +451,25 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '50mb' }));
 
+  // Prevent mobile browsers and proxies from caching any live sync API response
+  app.use('/api/live', (_req: Request, res: Response, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  });
+
   // Lightweight version check for fast client reconciliation
   app.get('/api/live/version', (_req: Request, res: Response) => {
-    res.setHeader('Cache-Control', 'no-store');
-    res.json({ version: store.version, updatedAt: store.updatedAt });
+    res.json({
+      version: store.version,
+      syncToken: computeSyncToken(),
+      updatedAt: store.updatedAt
+    });
   });
 
   // Authoritative live state fetch
   app.get('/api/live/state', (_req: Request, res: Response) => {
-    res.setHeader('Cache-Control', 'no-store');
     res.json(getPublicState());
   });
 
@@ -427,7 +484,11 @@ async function startServer() {
 
     sseClients.add(res);
     res.write(
-      `event: connected\ndata: ${JSON.stringify({ version: store.version, updatedAt: store.updatedAt })}\n\n`
+      `event: connected\ndata: ${JSON.stringify({
+        version: store.version,
+        syncToken: computeSyncToken(),
+        updatedAt: store.updatedAt
+      })}\n\n`
     );
 
     const heartbeat = setInterval(() => {
@@ -586,6 +647,7 @@ async function startServer() {
     }
 
     let changed = false;
+    const forceRestore = Boolean(req.body.forceRestore);
 
     if (Array.isArray(req.body.agendas)) {
       const existing = new Map(store.agendas.map((a) => [a.id, a]));
@@ -593,7 +655,7 @@ async function startServer() {
         const valid = validateAgendaPayload(raw, undefined, true);
         if (!valid) continue;
         const deletedAt = store.deletedIds.agendas[valid.id];
-        if (deletedAt && !isNewerThan(valid.updatedAt, deletedAt)) continue;
+        if (!forceRestore && deletedAt && !isNewerThan(valid.updatedAt, deletedAt)) continue;
 
         const current = existing.get(valid.id);
         if (!current) {
@@ -601,7 +663,7 @@ async function startServer() {
           store.agendas.push(valid);
           existing.set(valid.id, valid);
           changed = true;
-        } else if (isNewerThan(valid.updatedAt, current.updatedAt)) {
+        } else if (forceRestore || isNewerThan(valid.updatedAt, current.updatedAt)) {
           store.agendas = store.agendas.map((a) => (a.id === valid.id ? valid : a));
           existing.set(valid.id, valid);
           changed = true;
@@ -615,7 +677,7 @@ async function startServer() {
         const valid = validateJournalPayload(raw, undefined, true);
         if (!valid) continue;
         const deletedAt = store.deletedIds.journals[valid.id];
-        if (deletedAt && !isNewerThan(valid.updatedAt, deletedAt)) continue;
+        if (!forceRestore && deletedAt && !isNewerThan(valid.updatedAt, deletedAt)) continue;
 
         const current = existing.get(valid.id);
         if (!current) {
@@ -623,7 +685,7 @@ async function startServer() {
           store.journals.push(valid);
           existing.set(valid.id, valid);
           changed = true;
-        } else if (isNewerThan(valid.updatedAt, current.updatedAt)) {
+        } else if (forceRestore || isNewerThan(valid.updatedAt, current.updatedAt)) {
           store.journals = store.journals.map((j) => (j.id === valid.id ? valid : j));
           existing.set(valid.id, valid);
           changed = true;
@@ -637,7 +699,7 @@ async function startServer() {
         const valid = validateHolidayDutyPayload(raw, undefined, true);
         if (!valid) continue;
         const deletedAt = store.deletedIds.holidayDuties[valid.id];
-        if (deletedAt && !isNewerThan(valid.updatedAt, deletedAt)) continue;
+        if (!forceRestore && deletedAt && !isNewerThan(valid.updatedAt, deletedAt)) continue;
 
         const current = existing.get(valid.id);
         if (!current) {
@@ -645,7 +707,7 @@ async function startServer() {
           store.holidayDuties.push(valid);
           existing.set(valid.id, valid);
           changed = true;
-        } else if (isNewerThan(valid.updatedAt, current.updatedAt)) {
+        } else if (forceRestore || isNewerThan(valid.updatedAt, current.updatedAt)) {
           store.holidayDuties = store.holidayDuties.map((d) => (d.id === valid.id ? valid : d));
           existing.set(valid.id, valid);
           changed = true;

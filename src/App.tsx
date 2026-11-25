@@ -35,6 +35,7 @@ import { OfficialPrintView } from './components/OfficialPrintView';
 import { AgendaModal } from './components/AgendaModal';
 import { DocumentViewerModal } from './components/DocumentViewerModal';
 import { ActiveReminderBanner } from './components/ActiveReminderBanner';
+import { SyncDeviceModal } from './components/SyncDeviceModal';
 
 const MONTH_NAMES = [
   'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
@@ -56,6 +57,7 @@ export default function App() {
   // Views & Modals
   const [viewMode, setViewMode] = useState<ViewMode>('calendar');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [agendaToEdit, setAgendaToEdit] = useState<AgendaItem | null>(null);
   const [targetDateForNew, setTargetDateForNew] = useState<string>('');
   
@@ -76,18 +78,22 @@ export default function App() {
     leader: ''
   });
 
-  const serverVersionRef = useRef<number>(0);
+  const serverSyncTokenRef = useRef<string>('');
   const triggeredReminderIdsRef = useRef<Set<string>>(new Set());
 
   // Helper to apply authoritative live snapshot to React state + IndexedDB cache
   const applyLiveSnapshot = useCallback(async (snapshot: {
     version?: number;
+    syncToken?: string;
+    updatedAt?: string;
     agendas: AgendaItem[];
     journals: DailyJournalEntry[];
     holidayDuties: HolidayDutyEntry[];
   }) => {
-    if (typeof snapshot.version === 'number') {
-      serverVersionRef.current = snapshot.version;
+    if (snapshot.syncToken) {
+      serverSyncTokenRef.current = snapshot.syncToken;
+    } else if (typeof snapshot.version === 'number') {
+      serverSyncTokenRef.current = `${snapshot.version}:${snapshot.updatedAt || ''}:${snapshot.agendas.length}:${snapshot.journals.length}:${snapshot.holidayDuties.length}`;
     }
     setAgendas(snapshot.agendas);
     setJournals(snapshot.journals);
@@ -198,42 +204,36 @@ export default function App() {
 
     const unsubscribe = subscribeLiveUpdates(
       {
-        onAgendaUpsert: (item, version) => {
-          if (typeof version === 'number') serverVersionRef.current = version;
+        onAgendaUpsert: (item) => {
           setAgendas((prev) => {
             const exists = prev.some((a) => a.id === item.id);
             return exists ? prev.map((a) => (a.id === item.id ? item : a)) : [item, ...prev];
           });
           saveSingleAgendaToDB(item);
         },
-        onAgendaDelete: (id, version) => {
-          if (typeof version === 'number') serverVersionRef.current = version;
+        onAgendaDelete: (id) => {
           setAgendas((prev) => prev.filter((a) => a.id !== id));
           deleteAgendaFromDB(id);
         },
-        onJournalUpsert: (item, version) => {
-          if (typeof version === 'number') serverVersionRef.current = version;
+        onJournalUpsert: (item) => {
           setJournals((prev) => {
             const exists = prev.some((j) => j.id === item.id);
             return exists ? prev.map((j) => (j.id === item.id ? item : j)) : [item, ...prev];
           });
           saveSingleJournalToDB(item);
         },
-        onJournalDelete: (id, version) => {
-          if (typeof version === 'number') serverVersionRef.current = version;
+        onJournalDelete: (id) => {
           setJournals((prev) => prev.filter((j) => j.id !== id));
           deleteJournalFromDB(id);
         },
-        onDutyUpsert: (item, version) => {
-          if (typeof version === 'number') serverVersionRef.current = version;
+        onDutyUpsert: (item) => {
           setHolidayDuties((prev) => {
             const exists = prev.some((d) => d.id === item.id);
             return exists ? prev.map((d) => (d.id === item.id ? item : d)) : [...prev, item];
           });
           saveSingleHolidayDutyToDB(item);
         },
-        onDutyBatch: (items, version) => {
-          if (typeof version === 'number') serverVersionRef.current = version;
+        onDutyBatch: (items) => {
           setHolidayDuties((prev) => {
             const map = new Map(prev.map((d) => [d.id, d]));
             items.forEach((d) => map.set(d.id, d));
@@ -242,8 +242,7 @@ export default function App() {
             return merged;
           });
         },
-        onDutyDelete: (id, version) => {
-          if (typeof version === 'number') serverVersionRef.current = version;
+        onDutyDelete: (id) => {
           setHolidayDuties((prev) => prev.filter((d) => d.id !== id));
           deleteHolidayDutyFromDB(id);
         },
@@ -254,7 +253,7 @@ export default function App() {
           pullAuthoritativeState().catch(() => {});
         }
       },
-      () => serverVersionRef.current
+      () => serverSyncTokenRef.current
     );
 
     return () => {
@@ -373,15 +372,60 @@ export default function App() {
     return { total, vip, completed, upcoming };
   }, [monthAgendas]);
 
-  // Manual Live Sync trigger: flush offline queue then pull exact authoritative online state
-  const handleManualSync = async () => {
+  // Manual Live Sync trigger: flush offline queue + safe two-way merge + pull authoritative state
+  const handleManualSync = async (): Promise<{ ok: boolean; message: string }> => {
     setIsSyncing(true);
     try {
       await flushPendingOps();
-      const liveData = await fetchLiveState();
-      await applyLiveSnapshot(liveData);
+      const merged = await mergeLiveState({
+        agendas,
+        journals,
+        holidayDuties
+      });
+      await applyLiveSnapshot(merged);
+      return {
+        ok: true,
+        message: `Sinkronisasi berhasil (${merged.agendas.length} agenda, ${merged.journals.length} jurnal, ${merged.holidayDuties.length} piket).`
+      };
     } catch (err) {
       console.error('Gagal menyinkronkan data live:', err);
+      return {
+        ok: false,
+        message: 'Tidak dapat terhubung ke server saat ini. Data tersimpan lokal dan akan otomatis dikirim saat online.'
+      };
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Explicit JSON backup import for direct HP <-> Komputer transfer
+  const handleImportBackup = async (data: {
+    agendas: AgendaItem[];
+    journals: DailyJournalEntry[];
+    holidayDuties: HolidayDutyEntry[];
+  }): Promise<{ ok: boolean; message: string }> => {
+    setIsSyncing(true);
+    try {
+      const merged = await mergeLiveState({
+        ...data,
+        forceRestore: true
+      });
+      await applyLiveSnapshot(merged);
+      return {
+        ok: true,
+        message: `Data berhasil diimpor & disinkronkan (${merged.agendas.length} agenda, ${merged.journals.length} jurnal, ${merged.holidayDuties.length} piket).`
+      };
+    } catch (err) {
+      console.error('Gagal mengimpor data ke server, menyimpan lokal:', err);
+      await applyLiveSnapshot({
+        agendas: data.agendas,
+        journals: data.journals,
+        holidayDuties: data.holidayDuties
+      });
+      return {
+        ok: true,
+        message: 'Data berhasil diimpor ke perangkat ini secara lokal.'
+      };
     } finally {
       setIsSyncing(false);
     }
@@ -398,8 +442,7 @@ export default function App() {
     setAgendaToEdit(null);
 
     try {
-      const { item: canonical, version } = await syncAgendaUpsert(savedItem);
-      if (typeof version === 'number') serverVersionRef.current = version;
+      const { item: canonical } = await syncAgendaUpsert(savedItem);
       setAgendas((prev) => prev.map((a) => (a.id === canonical.id ? canonical : a)));
       await saveSingleAgendaToDB(canonical);
     } catch (err) {
@@ -412,8 +455,7 @@ export default function App() {
     setAgendas((prev) => prev.filter((a) => a.id !== id));
     await deleteAgendaFromDB(id);
     try {
-      const ver = await syncAgendaDelete(id);
-      if (typeof ver === 'number') serverVersionRef.current = ver;
+      await syncAgendaDelete(id);
     } catch (err) {
       console.error('Live agenda delete sync error, queued for retry:', err);
       await enqueuePendingOp({ type: 'agenda:delete', id, ts: Date.now() });
@@ -431,8 +473,7 @@ export default function App() {
     setAgendas((prev) => prev.map((a) => (a.id === id ? updatedItem : a)));
     await saveSingleAgendaToDB(updatedItem);
     try {
-      const { item: canonical, version } = await syncAgendaUpsert(updatedItem);
-      if (typeof version === 'number') serverVersionRef.current = version;
+      const { item: canonical } = await syncAgendaUpsert(updatedItem);
       setAgendas((prev) => prev.map((a) => (a.id === canonical.id ? canonical : a)));
       await saveSingleAgendaToDB(canonical);
     } catch (err) {
@@ -451,8 +492,7 @@ export default function App() {
     if (target) {
       saveSingleAgendaToDB(target);
       syncAgendaUpsert(target)
-        .then(({ item: canonical, version }) => {
-          if (typeof version === 'number') serverVersionRef.current = version;
+        .then(({ item: canonical }) => {
           setAgendas((prev) => prev.map((a) => (a.id === canonical.id ? canonical : a)));
           saveSingleAgendaToDB(canonical);
         })
@@ -496,8 +536,7 @@ export default function App() {
     });
     await saveSingleJournalToDB(entry);
     try {
-      const { item: canonical, version } = await syncJournalUpsert(entry);
-      if (typeof version === 'number') serverVersionRef.current = version;
+      const { item: canonical } = await syncJournalUpsert(entry);
       setJournals((prev) => prev.map((j) => (j.id === canonical.id ? canonical : j)));
       await saveSingleJournalToDB(canonical);
     } catch (err) {
@@ -510,8 +549,7 @@ export default function App() {
     setJournals((prev) => prev.filter((j) => j.id !== id));
     await deleteJournalFromDB(id);
     try {
-      const ver = await syncJournalDelete(id);
-      if (typeof ver === 'number') serverVersionRef.current = ver;
+      await syncJournalDelete(id);
     } catch (err) {
       console.error('Live journal delete sync error, queued for retry:', err);
       await enqueuePendingOp({ type: 'journal:delete', id, ts: Date.now() });
@@ -526,8 +564,7 @@ export default function App() {
     });
     await saveSingleHolidayDutyToDB(duty);
     try {
-      const { item: canonical, version } = await syncDutyUpsert(duty);
-      if (typeof version === 'number') serverVersionRef.current = version;
+      const { item: canonical } = await syncDutyUpsert(duty);
       setHolidayDuties((prev) => prev.map((d) => (d.id === canonical.id ? canonical : d)));
       await saveSingleHolidayDutyToDB(canonical);
     } catch (err) {
@@ -541,8 +578,7 @@ export default function App() {
     setHolidayDuties(updated);
     await saveHolidayDutiesToDB(updated);
     try {
-      const { items: canonicalAdded, version } = await syncDutyBatch(newDuties);
-      if (typeof version === 'number') serverVersionRef.current = version;
+      const { items: canonicalAdded } = await syncDutyBatch(newDuties);
       if (canonicalAdded.length > 0) {
         setHolidayDuties((prev) => {
           const map = new Map(prev.map((d) => [d.id, d]));
@@ -562,8 +598,7 @@ export default function App() {
     setHolidayDuties((prev) => prev.filter((d) => d.id !== id));
     await deleteHolidayDutyFromDB(id);
     try {
-      const ver = await syncDutyDelete(id);
-      if (typeof ver === 'number') serverVersionRef.current = ver;
+      await syncDutyDelete(id);
     } catch (err) {
       console.error('Live duty delete sync error, queued for retry:', err);
       await enqueuePendingOp({ type: 'duty:delete', id, ts: Date.now() });
@@ -596,7 +631,10 @@ export default function App() {
         totalAgendasThisMonth={stats.total}
         totalJournalsThisMonth={monthJournals.length}
         totalDutiesThisMonth={monthHolidayDuties.length}
-        onManualSync={handleManualSync}
+        onManualSync={() => {
+          void handleManualSync();
+        }}
+        onOpenSyncModal={() => setIsSyncModalOpen(true)}
         isSyncing={isSyncing}
       />
 
@@ -731,6 +769,18 @@ export default function App() {
       <DocumentViewerModal
         document={previewingDoc}
         onClose={() => setPreviewingDoc(null)}
+      />
+
+      {/* HP <-> Komputer Sync & Backup Transfer Modal */}
+      <SyncDeviceModal
+        isOpen={isSyncModalOpen}
+        onClose={() => setIsSyncModalOpen(false)}
+        agendas={agendas}
+        journals={journals}
+        holidayDuties={holidayDuties}
+        isSyncing={isSyncing}
+        onManualSync={handleManualSync}
+        onImportBackup={handleImportBackup}
       />
 
       {/* Footer */}

@@ -2,7 +2,7 @@ import React from 'react';
 import { 
   Calendar as CalendarIcon, ListOrdered, BarChart3, Printer, 
   Plus, Bell, BellRing, Download, Volume2, Sparkles, Shield,
-  BookOpen, ShieldCheck, RefreshCw
+  BookOpen, ShieldCheck, RefreshCw, Smartphone
 } from 'lucide-react';
 import { ViewMode } from '../types/agenda';
 import { playExecutiveChime } from '../utils/audioAlarm';
@@ -20,6 +20,7 @@ interface HeaderProps {
   totalJournalsThisMonth: number;
   totalDutiesThisMonth: number;
   onManualSync: () => void;
+  onOpenSyncModal: () => void;
   isSyncing: boolean;
 }
 
@@ -36,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
   totalJournalsThisMonth,
   totalDutiesThisMonth,
   onManualSync,
+  onOpenSyncModal,
   isSyncing
 }) => {
   return (
@@ -93,10 +95,20 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={onManualSync}
             disabled={isSyncing}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-200 border border-slate-700 text-xs font-medium transition"
-            title="Sinkronkan ulang data live dengan aplikasi sekarang"
+            title="Sinkronkan ulang data live sekarang"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-teal-400 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">{isSyncing ? 'Menyinkronkan...' : 'Sinkronkan Data'}</span>
+            <span className="hidden sm:inline">{isSyncing ? 'Menyinkronkan...' : 'Sinkronkan'}</span>
+          </button>
+
+          {/* HP <-> Komputer Sync & Transfer Modal Button */}
+          <button
+            onClick={onOpenSyncModal}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition"
+            title="Sinkronisasi & transfer data antara HP dan Komputer"
+          >
+            <Smartphone className="w-3.5 h-3.5 text-amber-400" />
+            <span>HP &harr; PC</span>
           </button>
 
           {/* Sync All Month's Agendas to Calendar (.ICS) */}

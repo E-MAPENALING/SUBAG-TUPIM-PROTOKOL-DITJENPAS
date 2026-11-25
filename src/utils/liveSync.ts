@@ -8,6 +8,7 @@ import {
 
 export interface LiveSyncPayload {
   version: number;
+  syncToken?: string;
   agendas: AgendaItem[];
   journals: DailyJournalEntry[];
   holidayDuties: HolidayDutyEntry[];
@@ -16,6 +17,7 @@ export interface LiveSyncPayload {
 
 export interface LiveVersionPayload {
   version: number;
+  syncToken?: string;
   updatedAt: string;
 }
 
@@ -40,7 +42,7 @@ export interface LiveEventHandlers {
   onDutyBatch: (items: HolidayDutyEntry[], version?: number) => void;
   onDutyDelete: (id: string, version?: number) => void;
   onFullSync: (state: LiveSyncPayload) => void;
-  onServerVersionChanged: (version: number) => void;
+  onServerVersionChanged: (tokenOrVersion: string) => void;
 }
 
 let inFlightMutations = 0;
@@ -148,10 +150,14 @@ export function notifyOtherTabs(reason: string): void {
   }
 }
 
-// ==================== LIVE REST API ====================
+// ==================== LIVE REST API (MOBILE + DESKTOP CACHE-SAFE) ====================
 
 export async function fetchLiveVersion(): Promise<LiveVersionPayload> {
-  const res = await fetch('/api/live/version', { cache: 'no-store' });
+  const res = await fetch(`/api/live/version?_t=${Date.now()}`, {
+    cache: 'no-store',
+    credentials: 'include',
+    headers: { 'Cache-Control': 'no-cache' }
+  });
   if (!res.ok) {
     throw new Error(`Live version check failed (${res.status})`);
   }
@@ -163,7 +169,11 @@ export async function fetchLiveVersion(): Promise<LiveVersionPayload> {
 }
 
 export async function fetchLiveState(): Promise<LiveSyncPayload> {
-  const res = await fetch('/api/live/state', { cache: 'no-store' });
+  const res = await fetch(`/api/live/state?_t=${Date.now()}`, {
+    cache: 'no-store',
+    credentials: 'include',
+    headers: { 'Cache-Control': 'no-cache' }
+  });
   if (!res.ok) {
     throw new Error(`Live state fetch failed (${res.status})`);
   }
@@ -178,11 +188,13 @@ export async function mergeLiveState(localData: {
   agendas: AgendaItem[];
   journals: DailyJournalEntry[];
   holidayDuties: HolidayDutyEntry[];
+  forceRestore?: boolean;
 }): Promise<LiveSyncPayload> {
   return withMutationTracking(async () => {
     const res = await fetch('/api/live/merge', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' },
       body: JSON.stringify(localData)
     });
     if (!res.ok) {
@@ -200,6 +212,7 @@ export async function syncAgendaUpsert(
   return withMutationTracking(async () => {
     const res = await fetch(`/api/live/agendas/${encodeURIComponent(item.id)}`, {
       method: 'PUT',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item)
     });
@@ -215,7 +228,8 @@ export async function syncAgendaUpsert(
 export async function syncAgendaDelete(id: string): Promise<number | undefined> {
   return withMutationTracking(async () => {
     const res = await fetch(`/api/live/agendas/${encodeURIComponent(id)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      credentials: 'include'
     });
     if (!res.ok) {
       throw new Error(`Agenda delete sync failed (${res.status})`);
@@ -232,6 +246,7 @@ export async function syncJournalUpsert(
   return withMutationTracking(async () => {
     const res = await fetch(`/api/live/journals/${encodeURIComponent(item.id)}`, {
       method: 'PUT',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item)
     });
@@ -247,7 +262,8 @@ export async function syncJournalUpsert(
 export async function syncJournalDelete(id: string): Promise<number | undefined> {
   return withMutationTracking(async () => {
     const res = await fetch(`/api/live/journals/${encodeURIComponent(id)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      credentials: 'include'
     });
     if (!res.ok) {
       throw new Error(`Journal delete sync failed (${res.status})`);
@@ -264,6 +280,7 @@ export async function syncDutyUpsert(
   return withMutationTracking(async () => {
     const res = await fetch(`/api/live/duties/${encodeURIComponent(item.id)}`, {
       method: 'PUT',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(item)
     });
@@ -282,6 +299,7 @@ export async function syncDutyBatch(
   return withMutationTracking(async () => {
     const res = await fetch('/api/live/duties/batch', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items })
     });
@@ -297,7 +315,8 @@ export async function syncDutyBatch(
 export async function syncDutyDelete(id: string): Promise<number | undefined> {
   return withMutationTracking(async () => {
     const res = await fetch(`/api/live/duties/${encodeURIComponent(id)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      credentials: 'include'
     });
     if (!res.ok) {
       throw new Error(`Holiday duty delete sync failed (${res.status})`);
@@ -308,11 +327,11 @@ export async function syncDutyDelete(id: string): Promise<number | undefined> {
   });
 }
 
-// ==================== REAL-TIME SUBSCRIPTION (SSE + BROADCAST + VERSION CHECK) ====================
+// ==================== REAL-TIME SUBSCRIPTION (SSE + BROADCAST + MOBILE-SAFE POLLING) ====================
 
 export function subscribeLiveUpdates(
   handlers: LiveEventHandlers,
-  getCurrentVersion: () => number
+  getCurrentSyncToken: () => string
 ): () => void {
   if (typeof window === 'undefined') {
     return () => {};
@@ -327,9 +346,10 @@ export function subscribeLiveUpdates(
     if (closed || document.visibilityState === 'hidden' || hasInFlightMutations()) return;
     try {
       await flushPendingOps();
-      const { version } = await fetchLiveVersion();
-      if (!closed && !hasInFlightMutations() && version !== getCurrentVersion()) {
-        handlers.onServerVersionChanged(version);
+      const payload = await fetchLiveVersion();
+      const remoteToken = payload.syncToken || `${payload.version}:${payload.updatedAt}`;
+      if (!closed && !hasInFlightMutations() && remoteToken !== getCurrentSyncToken()) {
+        handlers.onServerVersionChanged(remoteToken);
       }
     } catch {
       // ignore transient offline errors
@@ -338,20 +358,33 @@ export function subscribeLiveUpdates(
 
   const connectSse = () => {
     if (closed || typeof EventSource === 'undefined') return;
-    source = new EventSource('/api/live/stream');
+    if (source && source.readyState !== EventSource.CLOSED) return;
+
+    try {
+      source = new EventSource('/api/live/stream', { withCredentials: true });
+    } catch {
+      source = new EventSource('/api/live/stream');
+    }
 
     source.addEventListener('connected', (ev) => {
       try {
-        const payload = JSON.parse((ev as MessageEvent).data) as { version?: number };
+        const payload = JSON.parse((ev as MessageEvent).data) as {
+          version?: number;
+          syncToken?: string;
+          updatedAt?: string;
+        };
+        const remoteToken =
+          payload.syncToken ||
+          (typeof payload.version === 'number' ? `${payload.version}:${payload.updatedAt || ''}` : '');
         flushPendingOps()
           .then(() => {
             if (
               !closed &&
               !hasInFlightMutations() &&
-              typeof payload.version === 'number' &&
-              payload.version !== getCurrentVersion()
+              remoteToken &&
+              remoteToken !== getCurrentSyncToken()
             ) {
-              handlers.onServerVersionChanged(payload.version);
+              handlers.onServerVersionChanged(remoteToken);
             }
           })
           .catch(() => {});
@@ -464,28 +497,36 @@ export function subscribeLiveUpdates(
     }
   }
 
-  // Reconcile automatically when tab regains focus, visibility, or network connectivity
-  const handleVisibilityOrFocus = () => {
+  // Reconcile automatically when mobile/desktop tab wakes up, regains focus, or comes online
+  const handleWake = () => {
     if (document.visibilityState === 'visible') {
+      if (!source || source.readyState === EventSource.CLOSED) {
+        connectSse();
+      }
       checkVersionAndSync();
     }
   };
   const handleOnline = () => {
+    if (!source || source.readyState === EventSource.CLOSED) {
+      connectSse();
+    }
     flushPendingOps().finally(() => checkVersionAndSync());
   };
 
-  window.addEventListener('focus', handleVisibilityOrFocus);
-  document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+  window.addEventListener('focus', handleWake);
+  window.addEventListener('pageshow', handleWake);
+  document.addEventListener('visibilitychange', handleWake);
   window.addEventListener('online', handleOnline);
 
-  // Lightweight fallback version check every 5s in case proxy buffers SSE
-  const versionInterval = setInterval(checkVersionAndSync, 5000);
+  // Fast lightweight 3s version check for seamless HP <-> Komputer sync even if proxy buffers SSE
+  const versionInterval = setInterval(checkVersionAndSync, 3000);
 
   return () => {
     closed = true;
     clearInterval(versionInterval);
-    window.removeEventListener('focus', handleVisibilityOrFocus);
-    document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.removeEventListener('focus', handleWake);
+    window.removeEventListener('pageshow', handleWake);
+    document.removeEventListener('visibilitychange', handleWake);
     window.removeEventListener('online', handleOnline);
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (source) source.close();
