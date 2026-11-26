@@ -2,7 +2,7 @@ import React from 'react';
 import { 
   Calendar as CalendarIcon, ListOrdered, BarChart3, Printer, 
   Plus, Bell, BellRing, Download, Volume2, Sparkles, Shield,
-  BookOpen, ShieldCheck, RefreshCw, Smartphone
+  BookOpen, ShieldCheck, RefreshCw, Smartphone, LogIn, LogOut
 } from 'lucide-react';
 import { ViewMode } from '../types/agenda';
 import { playExecutiveChime } from '../utils/audioAlarm';
@@ -22,6 +22,11 @@ interface HeaderProps {
   onManualSync: () => void;
   onOpenSyncModal: () => void;
   isSyncing: boolean;
+  userEmail: string | null;
+  userDisplayName: string | null;
+  onSignInGoogle: () => void;
+  onSignOut: () => void;
+  isAuthLoading: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -38,7 +43,12 @@ export const Header: React.FC<HeaderProps> = ({
   totalDutiesThisMonth,
   onManualSync,
   onOpenSyncModal,
-  isSyncing
+  isSyncing,
+  userEmail,
+  userDisplayName,
+  onSignInGoogle,
+  onSignOut,
+  isAuthLoading
 }) => {
   return (
     <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-40 shadow-lg no-print">
@@ -61,13 +71,43 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-400">
-              Sistem Penjadwalan Bulanan, Pengingat Otomatis & Sinkronisasi Kalender
+              Sistem Penjadwalan Bulanan, Pengingat Otomatis &amp; Sinkronisasi Cloud HP &harr; PC
             </p>
           </div>
         </div>
 
         {/* Top Right Actions */}
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5">
+          {/* Google Account Cloud Sync Action */}
+          {userEmail ? (
+            <div className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-xs">
+              <button
+                onClick={onOpenSyncModal}
+                className="text-emerald-200 hover:text-white font-medium truncate max-w-[140px] sm:max-w-[180px] transition"
+                title={`Sinkron Cloud aktif: ${userEmail}`}
+              >
+                {userDisplayName || userEmail}
+              </button>
+              <button
+                onClick={onSignOut}
+                className="p-1 rounded-lg text-emerald-300 hover:text-white hover:bg-emerald-500/25 transition"
+                title="Keluar dari akun Google"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onSignInGoogle}
+              disabled={isAuthLoading}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 text-xs font-bold shadow-sm transition"
+              title="Masuk Google agar data otomatis sama di HP dan Komputer"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>{isAuthLoading ? 'Memproses...' : 'Masuk Google'}</span>
+            </button>
+          )}
+
           {/* Notification Permission Indicator / Button */}
           {notificationPermission === 'granted' ? (
             <button
@@ -76,36 +116,36 @@ export const Header: React.FC<HeaderProps> = ({
               title="Pengingat Browser Aktif. Klik untuk uji suara lonceng"
             >
               <BellRing className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">Pengingat Aktif</span>
+              <span className="hidden lg:inline">Pengingat Aktif</span>
               <Volume2 className="w-3 h-3 text-emerald-400/80" />
             </button>
           ) : (
             <button
               onClick={onRequestNotificationPermission}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-semibold hover:bg-amber-500/30 transition animate-pulse"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 text-xs font-semibold hover:bg-amber-500/30 transition"
               title="Izinkan notifikasi desktop agar pengingat agenda berbunyi"
             >
               <Bell className="w-3.5 h-3.5" />
-              <span>Aktifkan Pengingat</span>
+              <span className="hidden lg:inline">Aktifkan Pengingat</span>
             </button>
           )}
 
-          {/* Manual Live Data Sync Button */}
+          {/* Manual Cloud Sync Button */}
           <button
             onClick={onManualSync}
             disabled={isSyncing}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-200 border border-slate-700 text-xs font-medium transition"
-            title="Sinkronkan ulang data live sekarang"
+            title="Sinkronkan ulang data cloud sekarang"
           >
             <RefreshCw className={`w-3.5 h-3.5 text-teal-400 ${isSyncing ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">{isSyncing ? 'Menyinkronkan...' : 'Sinkronkan'}</span>
+            <span className="hidden lg:inline">{isSyncing ? 'Menyinkronkan...' : 'Sinkronkan'}</span>
           </button>
 
           {/* HP <-> Komputer Sync & Transfer Modal Button */}
           <button
             onClick={onOpenSyncModal}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition"
-            title="Sinkronisasi & transfer data antara HP dan Komputer"
+            title="Pengaturan sinkronisasi cloud & transfer berkas HP dan Komputer"
           >
             <Smartphone className="w-3.5 h-3.5 text-amber-400" />
             <span>HP &harr; PC</span>
@@ -118,8 +158,8 @@ export const Header: React.FC<HeaderProps> = ({
             title={`Unduh seluruh agenda ${selectedMonthName} ${selectedYear} ke kalender`}
           >
             <Download className="w-3.5 h-3.5 text-blue-400" />
-            <span className="hidden sm:inline">Kalender (.ics)</span>
-            <span className="sm:hidden">.ICS</span>
+            <span className="hidden lg:inline">Kalender (.ics)</span>
+            <span className="lg:hidden">.ICS</span>
           </button>
 
           {/* Add Agenda Button */}

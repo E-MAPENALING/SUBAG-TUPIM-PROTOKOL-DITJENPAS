@@ -281,14 +281,24 @@ export const AgendaListView: React.FC<AgendaListViewProps> = ({
                                       >
                                         <ExternalLink className="w-3.5 h-3.5" />
                                       </button>
-                                      <a
-                                        href={doc.dataUrl}
-                                        download={doc.name}
-                                        className="p-1 text-slate-500 hover:text-emerald-600 rounded hover:bg-white transition"
-                                        title="Unduh Berkas"
-                                      >
-                                        <Download className="w-3.5 h-3.5" />
-                                      </a>
+                                      {doc.dataUrl ? (
+                                        <a
+                                          href={doc.dataUrl}
+                                          download={doc.name}
+                                          className="p-1 text-slate-500 hover:text-emerald-600 rounded hover:bg-white transition"
+                                          title="Unduh Berkas"
+                                        >
+                                          <Download className="w-3.5 h-3.5" />
+                                        </a>
+                                      ) : (
+                                        <button
+                                          onClick={() => onPreviewDocument(doc)}
+                                          className="p-1 text-slate-500 hover:text-emerald-600 rounded hover:bg-white transition"
+                                          title="Buka & Unduh Berkas dari Cloud"
+                                        >
+                                          <Download className="w-3.5 h-3.5" />
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
                                 );

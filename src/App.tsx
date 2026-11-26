@@ -1,24 +1,57 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { 
-  AgendaItem, ViewMode, FilterState, DocumentAttachment, 
-  AgendaCategory, LeaderRole, AgendaStatus, DailyJournalEntry, HolidayDutyEntry 
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { Cloud, LogIn } from 'lucide-react';
+import {
+  AgendaItem,
+  ViewMode,
+  FilterState,
+  DocumentAttachment,
+  AgendaCategory,
+  LeaderRole,
+  AgendaStatus,
+  DailyJournalEntry,
+  HolidayDutyEntry
 } from './types/agenda';
 import { INITIAL_AGENDAS } from './data/initialAgendas';
 import { INITIAL_JOURNALS, INITIAL_HOLIDAY_DUTIES } from './data/initialJournalAndDuty';
-import { 
-  getAllAgendasFromDB, saveAgendasToDB, saveSingleAgendaToDB, deleteAgendaFromDB,
-  getAllJournalsFromDB, saveJournalsToDB, saveSingleJournalToDB, deleteJournalFromDB,
-  getAllHolidayDutiesFromDB, saveHolidayDutiesToDB, saveSingleHolidayDutyToDB, deleteHolidayDutyFromDB
-} from './utils/indexedDb';
 import {
-  fetchLiveState, mergeLiveState, flushPendingOps, enqueuePendingOp, subscribeLiveUpdates,
-  syncAgendaUpsert, syncAgendaDelete,
-  syncJournalUpsert, syncJournalDelete,
-  syncDutyUpsert, syncDutyBatch, syncDutyDelete
-} from './utils/liveSync';
-import { 
-  getNotificationPermission, requestNotificationPermission, 
-  sendDesktopNotification, checkAgendaAlert, ActiveAlert 
+  getAllAgendasFromDB,
+  saveAgendasToDB,
+  saveSingleAgendaToDB,
+  deleteAgendaFromDB,
+  getAllJournalsFromDB,
+  saveJournalsToDB,
+  saveSingleJournalToDB,
+  deleteJournalFromDB,
+  getAllHolidayDutiesFromDB,
+  saveHolidayDutiesToDB,
+  saveSingleHolidayDutyToDB,
+  deleteHolidayDutyFromDB,
+  getCachedAttachmentDataUrl
+} from './utils/indexedDb';
+import { auth, signInWithGoogle, signOutUser } from './firebase';
+import {
+  ensureUserProfile,
+  subscribeUserCollections,
+  fetchAllUserCollectionsOnce,
+  saveAgendaToFirestore,
+  updateAgendaStatusInFirestore,
+  updateAgendaReminderInFirestore,
+  deleteAgendaFromFirestore,
+  saveJournalToFirestore,
+  deleteJournalFromFirestore,
+  saveHolidayDutyToFirestore,
+  batchAddHolidayDutiesToFirestore,
+  deleteHolidayDutyFromFirestore,
+  uploadDatasetToFirestore,
+  fetchAttachmentDataUrl
+} from './utils/firestoreSync';
+import {
+  getNotificationPermission,
+  requestNotificationPermission,
+  sendDesktopNotification,
+  checkAgendaAlert,
+  ActiveAlert
 } from './utils/notifications';
 import { playExecutiveChime } from './utils/audioAlarm';
 import { downloadMonthlyIcsFile } from './utils/calendarSync';
@@ -43,13 +76,19 @@ const MONTH_NAMES = [
 ];
 
 export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
+  const [fatalError, setFatalError] = useState<Error | null>(null);
+
   const [agendas, setAgendas] = useState<AgendaItem[]>([]);
   const [journals, setJournals] = useState<DailyJournalEntry[]>([]);
   const [holidayDuties, setHolidayDuties] = useState<HolidayDutyEntry[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  // Selected date navigation (Defaults to current date: Nov 2026)
+  // Selected date navigation
   const today = useMemo(() => new Date(), []);
   const [selectedMonth, setSelectedMonth] = useState<number>(today.getMonth());
   const [selectedYear, setSelectedYear] = useState<number>(today.getFullYear());
@@ -60,9 +99,10 @@ export default function App() {
   const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
   const [agendaToEdit, setAgendaToEdit] = useState<AgendaItem | null>(null);
   const [targetDateForNew, setTargetDateForNew] = useState<string>('');
-  
-  // Document Viewer
+
+  // Document Viewer (with lazy cloud chunk loading)
   const [previewingDoc, setPreviewingDoc] = useState<DocumentAttachment | null>(null);
+  const [isLoadingDoc, setIsLoadingDoc] = useState(false);
 
   // Notification & Alerts
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
@@ -78,55 +118,75 @@ export default function App() {
     leader: ''
   });
 
-  const serverSyncTokenRef = useRef<string>('');
   const triggeredReminderIdsRef = useRef<Set<string>>(new Set());
 
-  // Helper to apply authoritative live snapshot to React state + IndexedDB cache
-  const applyLiveSnapshot = useCallback(async (snapshot: {
-    version?: number;
-    syncToken?: string;
-    updatedAt?: string;
-    agendas: AgendaItem[];
-    journals: DailyJournalEntry[];
-    holidayDuties: HolidayDutyEntry[];
-  }) => {
-    if (snapshot.syncToken) {
-      serverSyncTokenRef.current = snapshot.syncToken;
-    } else if (typeof snapshot.version === 'number') {
-      serverSyncTokenRef.current = `${snapshot.version}:${snapshot.updatedAt || ''}:${snapshot.agendas.length}:${snapshot.journals.length}:${snapshot.holidayDuties.length}`;
-    }
-    setAgendas(snapshot.agendas);
-    setJournals(snapshot.journals);
-    setHolidayDuties(snapshot.holidayDuties);
-    try {
-      localStorage.setItem('subag_tu_pim_synced_v2', '1');
-    } catch {
-      // ignore storage errors
-    }
-    await Promise.all([
-      saveAgendasToDB(snapshot.agendas),
-      saveJournalsToDB(snapshot.journals),
-      saveHolidayDutiesToDB(snapshot.holidayDuties)
-    ]);
+  // Propagate fatal Firestore errors to ErrorBoundary
+  if (fatalError) {
+    throw fatalError;
+  }
+
+  // Listen to Firebase Authentication state
+  useEffect(() => {
+    setNotificationPermission(getNotificationPermission());
+    const unsubAuth = onAuthStateChanged(auth, (nextUser) => {
+      setUser(nextUser);
+      setAuthReady(true);
+    });
+    return () => unsubAuth();
   }, []);
 
-  // Load initial data from Live Server (authoritative source of truth) and subscribe to real-time updates
+  // Load local cache when signed out OR attach real-time Firestore sync when signed in
   useEffect(() => {
+    if (!authReady) return;
+
     let active = true;
+    let unsubscribeFirestore: (() => void) | null = null;
 
-    async function pullAuthoritativeState(reconcileLocalOnFirstSync = false) {
-      await flushPendingOps();
+    async function loadLocalFallback() {
+      let localAgendas: AgendaItem[] = [];
+      let localJournals: DailyJournalEntry[] = [];
+      let localDuties: HolidayDutyEntry[] = [];
+      try {
+        [localAgendas, localJournals, localDuties] = await Promise.all([
+          getAllAgendasFromDB(),
+          getAllJournalsFromDB(),
+          getAllHolidayDutiesFromDB()
+        ]);
+      } catch {
+        // ignore IndexedDB errors
+      }
+      if (!active) return;
 
-      if (reconcileLocalOnFirstSync) {
-        const hasSyncedBefore = (() => {
-          try {
-            return localStorage.getItem('subag_tu_pim_synced_v2') === '1';
-          } catch {
-            return false;
-          }
-        })();
+      const hasLocalData =
+        localAgendas.length > 0 || localJournals.length > 0 || localDuties.length > 0;
+      const hasSyncedBefore = (() => {
+        try {
+          return localStorage.getItem('subag_tu_pim_cloud_synced') === '1';
+        } catch {
+          return false;
+        }
+      })();
 
-        if (!hasSyncedBefore) {
+      if (hasLocalData || hasSyncedBefore) {
+        setAgendas(localAgendas);
+        setJournals(localJournals);
+        setHolidayDuties(localDuties);
+      } else {
+        setAgendas(INITIAL_AGENDAS);
+        setJournals(INITIAL_JOURNALS);
+        setHolidayDuties(INITIAL_HOLIDAY_DUTIES);
+      }
+      setIsLoaded(true);
+    }
+
+    async function initCloudSync(signedInUser: User) {
+      setIsSyncing(true);
+      try {
+        const { isNewProfile } = await ensureUserProfile(signedInUser);
+        if (!active) return;
+
+        // First-time cloud setup: preserve existing local IndexedDB records (or seed starter data once)
+        if (isNewProfile) {
           let localAgendas: AgendaItem[] = [];
           let localJournals: DailyJournalEntry[] = [];
           let localDuties: HolidayDutyEntry[] = [];
@@ -137,130 +197,77 @@ export default function App() {
               getAllHolidayDutiesFromDB()
             ]);
           } catch {
-            // ignore IndexedDB read errors
+            // ignore IndexedDB errors
           }
 
           if (localAgendas.length > 0 || localJournals.length > 0 || localDuties.length > 0) {
-            const merged = await mergeLiveState({
+            await uploadDatasetToFirestore(signedInUser.uid, {
               agendas: localAgendas,
               journals: localJournals,
               holidayDuties: localDuties
             });
-            if (!active) return;
-            await applyLiveSnapshot(merged);
-            return;
+          } else {
+            await uploadDatasetToFirestore(signedInUser.uid, {
+              agendas: INITIAL_AGENDAS,
+              journals: INITIAL_JOURNALS,
+              holidayDuties: INITIAL_HOLIDAY_DUTIES
+            });
           }
         }
-      }
 
-      const liveData = await fetchLiveState();
-      if (!active) return;
-      await applyLiveSnapshot(liveData);
-    }
-
-    async function initLiveSync() {
-      try {
-        await pullAuthoritativeState(true);
-      } catch (err) {
-        console.warn('Gagal menghubungi server live, menggunakan cache lokal:', err);
         if (!active) return;
-        let localAgendas: AgendaItem[] = [];
-        let localJournals: DailyJournalEntry[] = [];
-        let localDuties: HolidayDutyEntry[] = [];
-        try {
-          [localAgendas, localJournals, localDuties] = await Promise.all([
-            getAllAgendasFromDB(),
-            getAllJournalsFromDB(),
-            getAllHolidayDutiesFromDB()
-          ]);
-        } catch {
-          // ignore IndexedDB errors
-        }
-        const hasSyncedBefore = (() => {
-          try {
-            return localStorage.getItem('subag_tu_pim_synced_v2') === '1';
-          } catch {
-            return false;
-          }
-        })();
 
-        // Never resurrect deleted dummy items if this browser has already synced before
-        if (hasSyncedBefore || localAgendas.length > 0 || localJournals.length > 0 || localDuties.length > 0) {
-          setAgendas(localAgendas);
-          setJournals(localJournals);
-          setHolidayDuties(localDuties);
-        } else {
-          setAgendas(INITIAL_AGENDAS);
-          setJournals(INITIAL_JOURNALS);
-          setHolidayDuties(INITIAL_HOLIDAY_DUTIES);
+        try {
+          localStorage.setItem('subag_tu_pim_cloud_synced', '1');
+        } catch {
+          // ignore storage quota
         }
+
+        unsubscribeFirestore = subscribeUserCollections(signedInUser.uid, {
+          onAgendas: (cloudAgendas) => {
+            if (!active) return;
+            setAgendas(cloudAgendas);
+            setIsLoaded(true);
+            void saveAgendasToDB(cloudAgendas);
+          },
+          onJournals: (cloudJournals) => {
+            if (!active) return;
+            setJournals(cloudJournals);
+            void saveJournalsToDB(cloudJournals);
+          },
+          onHolidayDuties: (cloudDuties) => {
+            if (!active) return;
+            setHolidayDuties(cloudDuties);
+            void saveHolidayDutiesToDB(cloudDuties);
+          },
+          onError: (err) => {
+            if (!active) return;
+            setFatalError(err);
+          }
+        });
+      } catch (err) {
+        if (!active) return;
+        setFatalError(err instanceof Error ? err : new Error(String(err)));
       } finally {
-        if (active) setIsLoaded(true);
+        if (active) {
+          setIsSyncing(false);
+        }
       }
     }
 
-    initLiveSync();
-    setNotificationPermission(getNotificationPermission());
-
-    const unsubscribe = subscribeLiveUpdates(
-      {
-        onAgendaUpsert: (item) => {
-          setAgendas((prev) => {
-            const exists = prev.some((a) => a.id === item.id);
-            return exists ? prev.map((a) => (a.id === item.id ? item : a)) : [item, ...prev];
-          });
-          saveSingleAgendaToDB(item);
-        },
-        onAgendaDelete: (id) => {
-          setAgendas((prev) => prev.filter((a) => a.id !== id));
-          deleteAgendaFromDB(id);
-        },
-        onJournalUpsert: (item) => {
-          setJournals((prev) => {
-            const exists = prev.some((j) => j.id === item.id);
-            return exists ? prev.map((j) => (j.id === item.id ? item : j)) : [item, ...prev];
-          });
-          saveSingleJournalToDB(item);
-        },
-        onJournalDelete: (id) => {
-          setJournals((prev) => prev.filter((j) => j.id !== id));
-          deleteJournalFromDB(id);
-        },
-        onDutyUpsert: (item) => {
-          setHolidayDuties((prev) => {
-            const exists = prev.some((d) => d.id === item.id);
-            return exists ? prev.map((d) => (d.id === item.id ? item : d)) : [...prev, item];
-          });
-          saveSingleHolidayDutyToDB(item);
-        },
-        onDutyBatch: (items) => {
-          setHolidayDuties((prev) => {
-            const map = new Map(prev.map((d) => [d.id, d]));
-            items.forEach((d) => map.set(d.id, d));
-            const merged = Array.from(map.values());
-            saveHolidayDutiesToDB(merged);
-            return merged;
-          });
-        },
-        onDutyDelete: (id) => {
-          setHolidayDuties((prev) => prev.filter((d) => d.id !== id));
-          deleteHolidayDutyFromDB(id);
-        },
-        onFullSync: (state) => {
-          applyLiveSnapshot(state);
-        },
-        onServerVersionChanged: () => {
-          pullAuthoritativeState().catch(() => {});
-        }
-      },
-      () => serverSyncTokenRef.current
-    );
+    if (user && user.emailVerified) {
+      void initCloudSync(user);
+    } else {
+      void loadLocalFallback();
+    }
 
     return () => {
       active = false;
-      unsubscribe();
+      if (unsubscribeFirestore) {
+        unsubscribeFirestore();
+      }
     };
-  }, [applyLiveSnapshot]);
+  }, [authReady, user]);
 
   // Background reminder periodic checker (Runs every 10 seconds)
   useEffect(() => {
@@ -277,7 +284,6 @@ export default function App() {
         if (alert) {
           currentActive.push(alert);
 
-          // If sound is enabled and not already notified for this session
           const triggerKey = `${agenda.id}:${agenda.date}:${agenda.startTime}`;
           if (
             agenda.reminder.soundEnabled &&
@@ -288,12 +294,18 @@ export default function App() {
             playExecutiveChime();
             sendDesktopNotification(agenda);
 
-            // Mark as triggered locally so it doesn't repeatedly ring every 10s
-            const updatedAgenda = {
-              ...agenda,
-              reminder: { ...agenda.reminder, triggered: true, lastNotified: now.toISOString() }
+            const updatedReminder = {
+              ...agenda.reminder,
+              triggered: true,
+              lastNotified: now.toISOString()
             };
-            saveSingleAgendaToDB(updatedAgenda);
+            const updatedAgenda = { ...agenda, reminder: updatedReminder };
+            void saveSingleAgendaToDB(updatedAgenda);
+            if (user && user.emailVerified) {
+              updateAgendaReminderInFirestore(user.uid, agenda.id, updatedReminder).catch((err) => {
+                console.warn('Gagal memperbarui status pengingat di cloud:', err);
+              });
+            }
           }
         }
       }
@@ -304,7 +316,27 @@ export default function App() {
     checkReminders();
     const interval = setInterval(checkReminders, 10000);
     return () => clearInterval(interval);
-  }, [agendas, isLoaded, dismissedAlertIds]);
+  }, [agendas, isLoaded, dismissedAlertIds, user]);
+
+  const handleSignInGoogle = useCallback(async () => {
+    setIsAuthLoading(true);
+    setAuthNotice(null);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      const code = (err as { code?: string })?.code || '';
+      if (code !== 'auth/popup-closed-by-user' && code !== 'auth/cancelled-popup-request') {
+        setAuthNotice('Gagal masuk dengan Google. Pastikan pop-up diizinkan lalu coba kembali.');
+      }
+      throw err;
+    } finally {
+      setIsAuthLoading(false);
+    }
+  }, []);
+
+  const handleSignOut = useCallback(async () => {
+    await signOutUser();
+  }, []);
 
   const handleRequestPermission = async () => {
     const perm = await requestNotificationPermission();
@@ -313,6 +345,38 @@ export default function App() {
       playExecutiveChime();
     }
   };
+
+  // Lazy-load PDF / Image attachment chunks from Firestore when previewing on another device
+  const handlePreviewDocument = useCallback(
+    async (docItem: DocumentAttachment) => {
+      if (docItem.dataUrl && docItem.dataUrl.length > 0) {
+        setPreviewingDoc(docItem);
+        setIsLoadingDoc(false);
+        return;
+      }
+
+      setPreviewingDoc(docItem);
+      setIsLoadingDoc(true);
+      try {
+        let resolvedUrl = '';
+        if (user && user.emailVerified) {
+          resolvedUrl = await fetchAttachmentDataUrl(user.uid, docItem);
+        } else {
+          resolvedUrl = (await getCachedAttachmentDataUrl(docItem.id)) || '';
+        }
+        setPreviewingDoc((current) =>
+          current && current.id === docItem.id
+            ? { ...current, dataUrl: resolvedUrl }
+            : current
+        );
+      } catch (err) {
+        console.error('Gagal memuat lampiran dari cloud:', err);
+      } finally {
+        setIsLoadingDoc(false);
+      }
+    },
+    [user]
+  );
 
   // Extract all categories and leaders for filters
   const categories = useMemo(() => {
@@ -372,33 +436,73 @@ export default function App() {
     return { total, vip, completed, upcoming };
   }, [monthAgendas]);
 
-  // Manual Live Sync trigger: flush offline queue + safe two-way merge + pull authoritative state
+  // Manual Cloud Sync refresh
   const handleManualSync = async (): Promise<{ ok: boolean; message: string }> => {
-    setIsSyncing(true);
-    try {
-      await flushPendingOps();
-      const merged = await mergeLiveState({
-        agendas,
-        journals,
-        holidayDuties
-      });
-      await applyLiveSnapshot(merged);
-      return {
-        ok: true,
-        message: `Sinkronisasi berhasil (${merged.agendas.length} agenda, ${merged.journals.length} jurnal, ${merged.holidayDuties.length} piket).`
-      };
-    } catch (err) {
-      console.error('Gagal menyinkronkan data live:', err);
+    if (!user || !user.emailVerified) {
+      setIsSyncModalOpen(true);
       return {
         ok: false,
-        message: 'Tidak dapat terhubung ke server saat ini. Data tersimpan lokal dan akan otomatis dikirim saat online.'
+        message: 'Silakan masuk dengan akun Google terlebih dahulu agar data tersinkronisasi antara HP dan Komputer.'
+      };
+    }
+
+    setIsSyncing(true);
+    try {
+      const snapshot = await fetchAllUserCollectionsOnce(user.uid);
+      setAgendas(snapshot.agendas);
+      setJournals(snapshot.journals);
+      setHolidayDuties(snapshot.holidayDuties);
+      await Promise.all([
+        saveAgendasToDB(snapshot.agendas),
+        saveJournalsToDB(snapshot.journals),
+        saveHolidayDutiesToDB(snapshot.holidayDuties)
+      ]);
+      return {
+        ok: true,
+        message: `Data cloud terbaru berhasil dimuat (${snapshot.agendas.length} agenda, ${snapshot.journals.length} jurnal, ${snapshot.holidayDuties.length} piket).`
+      };
+    } catch (err) {
+      setFatalError(err instanceof Error ? err : new Error(String(err)));
+      return {
+        ok: false,
+        message: 'Gagal menarik data dari cloud. Periksa koneksi internet Anda.'
       };
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // Explicit JSON backup import for direct HP <-> Komputer transfer
+  // Explicit push of current device dataset into cloud
+  const handleUploadLocalToCloud = async (): Promise<{ ok: boolean; message: string }> => {
+    if (!user || !user.emailVerified) {
+      return {
+        ok: false,
+        message: 'Silakan masuk dengan akun Google terlebih dahulu.'
+      };
+    }
+    setIsSyncing(true);
+    try {
+      await uploadDatasetToFirestore(user.uid, {
+        agendas,
+        journals,
+        holidayDuties
+      });
+      return {
+        ok: true,
+        message: `Seluruh data perangkat ini (${agendas.length} agenda, ${journals.length} jurnal, ${holidayDuties.length} piket) berhasil diunggah ke cloud.`
+      };
+    } catch (err) {
+      setFatalError(err instanceof Error ? err : new Error(String(err)));
+      return {
+        ok: false,
+        message: 'Gagal mengunggah data lokal ke cloud.'
+      };
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  // Explicit JSON backup import (writes to Firestore if signed in, otherwise local IndexedDB)
   const handleImportBackup = async (data: {
     agendas: AgendaItem[];
     journals: DailyJournalEntry[];
@@ -406,32 +510,38 @@ export default function App() {
   }): Promise<{ ok: boolean; message: string }> => {
     setIsSyncing(true);
     try {
-      const merged = await mergeLiveState({
-        ...data,
-        forceRestore: true
-      });
-      await applyLiveSnapshot(merged);
+      if (user && user.emailVerified) {
+        await uploadDatasetToFirestore(user.uid, data);
+        return {
+          ok: true,
+          message: `Data berhasil diimpor ke database cloud (${data.agendas.length} agenda, ${data.journals.length} jurnal, ${data.holidayDuties.length} piket) dan otomatis tersinkron ke semua perangkat.`
+        };
+      }
+
+      setAgendas(data.agendas);
+      setJournals(data.journals);
+      setHolidayDuties(data.holidayDuties);
+      await Promise.all([
+        saveAgendasToDB(data.agendas),
+        saveJournalsToDB(data.journals),
+        saveHolidayDutiesToDB(data.holidayDuties)
+      ]);
       return {
         ok: true,
-        message: `Data berhasil diimpor & disinkronkan (${merged.agendas.length} agenda, ${merged.journals.length} jurnal, ${merged.holidayDuties.length} piket).`
+        message: 'Data berhasil diimpor secara lokal. Masuk dengan akun Google agar data otomatis tersinkron ke HP dan Komputer.'
       };
     } catch (err) {
-      console.error('Gagal mengimpor data ke server, menyimpan lokal:', err);
-      await applyLiveSnapshot({
-        agendas: data.agendas,
-        journals: data.journals,
-        holidayDuties: data.holidayDuties
-      });
+      setFatalError(err instanceof Error ? err : new Error(String(err)));
       return {
-        ok: true,
-        message: 'Data berhasil diimpor ke perangkat ini secara lokal.'
+        ok: false,
+        message: 'Terjadi kendala saat mengimpor data.'
       };
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // Handlers (optimistic update + authoritative live server sync + IndexedDB offline queue fallback)
+  // CRUD Handlers — write directly to Firestore when signed in (with optimistic UI + IndexedDB cache)
   const handleSaveAgenda = async (savedItem: AgendaItem) => {
     setAgendas((prev) => {
       const exists = prev.some((a) => a.id === savedItem.id);
@@ -441,24 +551,25 @@ export default function App() {
     setIsModalOpen(false);
     setAgendaToEdit(null);
 
-    try {
-      const { item: canonical } = await syncAgendaUpsert(savedItem);
-      setAgendas((prev) => prev.map((a) => (a.id === canonical.id ? canonical : a)));
-      await saveSingleAgendaToDB(canonical);
-    } catch (err) {
-      console.error('Live agenda sync error, queued for retry:', err);
-      await enqueuePendingOp({ type: 'agenda:upsert', item: savedItem, ts: Date.now() });
+    if (user && user.emailVerified) {
+      try {
+        await saveAgendaToFirestore(user.uid, savedItem);
+      } catch (err) {
+        setFatalError(err instanceof Error ? err : new Error(String(err)));
+      }
     }
   };
 
   const handleDeleteAgenda = async (id: string) => {
+    const target = agendas.find((a) => a.id === id);
     setAgendas((prev) => prev.filter((a) => a.id !== id));
     await deleteAgendaFromDB(id);
-    try {
-      await syncAgendaDelete(id);
-    } catch (err) {
-      console.error('Live agenda delete sync error, queued for retry:', err);
-      await enqueuePendingOp({ type: 'agenda:delete', id, ts: Date.now() });
+    if (user && user.emailVerified) {
+      try {
+        await deleteAgendaFromFirestore(user.uid, id, target?.documents);
+      } catch (err) {
+        setFatalError(err instanceof Error ? err : new Error(String(err)));
+      }
     }
   };
 
@@ -472,35 +583,33 @@ export default function App() {
     };
     setAgendas((prev) => prev.map((a) => (a.id === id ? updatedItem : a)));
     await saveSingleAgendaToDB(updatedItem);
-    try {
-      const { item: canonical } = await syncAgendaUpsert(updatedItem);
-      setAgendas((prev) => prev.map((a) => (a.id === canonical.id ? canonical : a)));
-      await saveSingleAgendaToDB(canonical);
-    } catch (err) {
-      console.error('Live status sync error, queued for retry:', err);
-      await enqueuePendingOp({ type: 'agenda:upsert', item: updatedItem, ts: Date.now() });
+
+    if (user && user.emailVerified) {
+      try {
+        await updateAgendaStatusInFirestore(user.uid, id, newStatus);
+      } catch (err) {
+        setFatalError(err instanceof Error ? err : new Error(String(err)));
+      }
     }
   };
 
   const handleSnooze = (agendaId: string, minutes: number) => {
     const snoozeUntil = Date.now() + minutes * 60 * 1000;
-    const updated = agendas.map((a) =>
-      a.id === agendaId ? { ...a, reminder: { ...a.reminder, snoozedUntil: snoozeUntil } } : a
-    );
-    setAgendas(updated);
-    const target = updated.find((a) => a.id === agendaId);
-    if (target) {
-      saveSingleAgendaToDB(target);
-      syncAgendaUpsert(target)
-        .then(({ item: canonical }) => {
-          setAgendas((prev) => prev.map((a) => (a.id === canonical.id ? canonical : a)));
-          saveSingleAgendaToDB(canonical);
-        })
-        .catch(() => {
-          enqueuePendingOp({ type: 'agenda:upsert', item: target, ts: Date.now() });
-        });
-    }
+    const target = agendas.find((a) => a.id === agendaId);
+    if (!target) return;
+
+    const updatedReminder = { ...target.reminder, snoozedUntil: snoozeUntil };
+    const updatedItem = { ...target, reminder: updatedReminder };
+
+    setAgendas((prev) => prev.map((a) => (a.id === agendaId ? updatedItem : a)));
+    void saveSingleAgendaToDB(updatedItem);
     setActiveAlerts((prev) => prev.filter((item) => item.agenda.id !== agendaId));
+
+    if (user && user.emailVerified) {
+      updateAgendaReminderInFirestore(user.uid, agendaId, updatedReminder).catch((err) => {
+        setFatalError(err instanceof Error ? err : new Error(String(err)));
+      });
+    }
   };
 
   const handleDismissAlert = (agendaId: string) => {
@@ -535,24 +644,26 @@ export default function App() {
       return exists ? prev.map((j) => (j.id === entry.id ? entry : j)) : [entry, ...prev];
     });
     await saveSingleJournalToDB(entry);
-    try {
-      const { item: canonical } = await syncJournalUpsert(entry);
-      setJournals((prev) => prev.map((j) => (j.id === canonical.id ? canonical : j)));
-      await saveSingleJournalToDB(canonical);
-    } catch (err) {
-      console.error('Live journal sync error, queued for retry:', err);
-      await enqueuePendingOp({ type: 'journal:upsert', item: entry, ts: Date.now() });
+
+    if (user && user.emailVerified) {
+      try {
+        await saveJournalToFirestore(user.uid, entry);
+      } catch (err) {
+        setFatalError(err instanceof Error ? err : new Error(String(err)));
+      }
     }
   };
 
   const handleDeleteJournal = async (id: string) => {
+    const target = journals.find((j) => j.id === id);
     setJournals((prev) => prev.filter((j) => j.id !== id));
     await deleteJournalFromDB(id);
-    try {
-      await syncJournalDelete(id);
-    } catch (err) {
-      console.error('Live journal delete sync error, queued for retry:', err);
-      await enqueuePendingOp({ type: 'journal:delete', id, ts: Date.now() });
+    if (user && user.emailVerified) {
+      try {
+        await deleteJournalFromFirestore(user.uid, id, target?.documents);
+      } catch (err) {
+        setFatalError(err instanceof Error ? err : new Error(String(err)));
+      }
     }
   };
 
@@ -563,13 +674,13 @@ export default function App() {
       return exists ? prev.map((d) => (d.id === duty.id ? duty : d)) : [...prev, duty];
     });
     await saveSingleHolidayDutyToDB(duty);
-    try {
-      const { item: canonical } = await syncDutyUpsert(duty);
-      setHolidayDuties((prev) => prev.map((d) => (d.id === canonical.id ? canonical : d)));
-      await saveSingleHolidayDutyToDB(canonical);
-    } catch (err) {
-      console.error('Live duty sync error, queued for retry:', err);
-      await enqueuePendingOp({ type: 'duty:upsert', item: duty, ts: Date.now() });
+
+    if (user && user.emailVerified) {
+      try {
+        await saveHolidayDutyToFirestore(user.uid, duty);
+      } catch (err) {
+        setFatalError(err instanceof Error ? err : new Error(String(err)));
+      }
     }
   };
 
@@ -577,31 +688,26 @@ export default function App() {
     const updated = [...holidayDuties, ...newDuties];
     setHolidayDuties(updated);
     await saveHolidayDutiesToDB(updated);
-    try {
-      const { items: canonicalAdded } = await syncDutyBatch(newDuties);
-      if (canonicalAdded.length > 0) {
-        setHolidayDuties((prev) => {
-          const map = new Map(prev.map((d) => [d.id, d]));
-          canonicalAdded.forEach((d) => map.set(d.id, d));
-          const merged = Array.from(map.values());
-          saveHolidayDutiesToDB(merged);
-          return merged;
-        });
+
+    if (user && user.emailVerified) {
+      try {
+        await batchAddHolidayDutiesToFirestore(user.uid, newDuties);
+      } catch (err) {
+        setFatalError(err instanceof Error ? err : new Error(String(err)));
       }
-    } catch (err) {
-      console.error('Live duty batch sync error, queued for retry:', err);
-      await enqueuePendingOp({ type: 'duty:batch', items: newDuties, ts: Date.now() });
     }
   };
 
   const handleDeleteHolidayDuty = async (id: string) => {
     setHolidayDuties((prev) => prev.filter((d) => d.id !== id));
     await deleteHolidayDutyFromDB(id);
-    try {
-      await syncDutyDelete(id);
-    } catch (err) {
-      console.error('Live duty delete sync error, queued for retry:', err);
-      await enqueuePendingOp({ type: 'duty:delete', id, ts: Date.now() });
+
+    if (user && user.emailVerified) {
+      try {
+        await deleteHolidayDutyFromFirestore(user.uid, id);
+      } catch (err) {
+        setFatalError(err instanceof Error ? err : new Error(String(err)));
+      }
     }
   };
 
@@ -636,10 +742,52 @@ export default function App() {
         }}
         onOpenSyncModal={() => setIsSyncModalOpen(true)}
         isSyncing={isSyncing}
+        userEmail={user?.email || null}
+        userDisplayName={user?.displayName || null}
+        onSignInGoogle={() => {
+          void handleSignInGoogle().catch(() => {});
+        }}
+        onSignOut={() => {
+          void handleSignOut();
+        }}
+        isAuthLoading={isAuthLoading}
       />
 
       {/* Main App Content Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Cloud Sync Prompt Banner when user is not yet signed in */}
+        {authReady && !user && viewMode !== 'print' && (
+          <div className="mb-5 p-4 rounded-2xl bg-gradient-to-r from-slate-900 to-slate-800 text-white border border-slate-700 shadow-md flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 no-print">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-400/30 shrink-0">
+                <Cloud className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-white">
+                  Aktifkan Sinkronisasi Real-Time HP &amp; Komputer
+                </h2>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Masuk menggunakan <strong>akun Google yang sama</strong> di HP dan Komputer agar seluruh agenda, jurnal harian, piket, dan lampiran otomatis sama setiap saat.
+                </p>
+                {authNotice && (
+                  <p className="text-xs text-amber-300 mt-1 font-medium">{authNotice}</p>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                void handleSignInGoogle().catch(() => {});
+              }}
+              disabled={isAuthLoading}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-60 text-slate-950 text-xs sm:text-sm font-bold shadow-sm transition shrink-0"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>{isAuthLoading ? 'Membuka Google...' : 'Masuk dengan Google'}</span>
+            </button>
+          </div>
+        )}
+
         {viewMode !== 'print' && (
           <>
             {/* Month & Year Navigation + Stats */}
@@ -683,7 +831,9 @@ export default function App() {
             holidayDuties={monthHolidayDuties}
             onSelectAgenda={handleOpenEditModal}
             onAddAgendaForDate={(dateStr) => handleOpenNewModal(dateStr)}
-            onPreviewDocument={(doc) => setPreviewingDoc(doc)}
+            onPreviewDocument={(doc) => {
+              void handlePreviewDocument(doc);
+            }}
             onOpenHolidayDutyTab={() => setViewMode('piket')}
           />
         )}
@@ -694,7 +844,9 @@ export default function App() {
             onEditAgenda={handleOpenEditModal}
             onDeleteAgenda={handleDeleteAgenda}
             onStatusChange={handleStatusChange}
-            onPreviewDocument={(doc) => setPreviewingDoc(doc)}
+            onPreviewDocument={(doc) => {
+              void handlePreviewDocument(doc);
+            }}
             onAddNew={() => handleOpenNewModal()}
           />
         )}
@@ -708,7 +860,9 @@ export default function App() {
             selectedMonth={selectedMonth}
             onSaveJournal={handleSaveJournal}
             onDeleteJournal={handleDeleteJournal}
-            onPreviewDocument={(doc) => setPreviewingDoc(doc)}
+            onPreviewDocument={(doc) => {
+              void handlePreviewDocument(doc);
+            }}
           />
         )}
 
@@ -730,7 +884,9 @@ export default function App() {
             selectedMonthName={MONTH_NAMES[selectedMonth]}
             selectedYear={selectedYear}
             onSelectAgenda={handleOpenEditModal}
-            onPreviewDocument={(doc) => setPreviewingDoc(doc)}
+            onPreviewDocument={(doc) => {
+              void handlePreviewDocument(doc);
+            }}
           />
         )}
 
@@ -756,7 +912,7 @@ export default function App() {
           }}
           onSave={handleSaveAgenda}
           onDelete={(id) => {
-            handleDeleteAgenda(id);
+            void handleDeleteAgenda(id);
             setIsModalOpen(false);
             setAgendaToEdit(null);
           }}
@@ -768,10 +924,14 @@ export default function App() {
       {/* Document Viewer Modal (PDF & Images) */}
       <DocumentViewerModal
         document={previewingDoc}
-        onClose={() => setPreviewingDoc(null)}
+        isLoading={isLoadingDoc}
+        onClose={() => {
+          setPreviewingDoc(null);
+          setIsLoadingDoc(false);
+        }}
       />
 
-      {/* HP <-> Komputer Sync & Backup Transfer Modal */}
+      {/* HP <-> Komputer Cloud Sync & Backup Transfer Modal */}
       <SyncDeviceModal
         isOpen={isSyncModalOpen}
         onClose={() => setIsSyncModalOpen(false)}
@@ -779,7 +939,13 @@ export default function App() {
         journals={journals}
         holidayDuties={holidayDuties}
         isSyncing={isSyncing}
+        userEmail={user?.email || null}
+        userDisplayName={user?.displayName || null}
+        isAuthLoading={isAuthLoading}
+        onSignInGoogle={handleSignInGoogle}
+        onSignOut={handleSignOut}
         onManualSync={handleManualSync}
+        onUploadLocalToCloud={handleUploadLocalToCloud}
         onImportBackup={handleImportBackup}
       />
 
@@ -790,7 +956,7 @@ export default function App() {
             SUBAG TU PIM &amp; PROTOKOL DITJENPAS • Manajemen Agenda, Jurnal Harian &amp; Piket Protokol
           </p>
           <p className="text-slate-400">
-            Dilengkapi Pengingat Otomatis • Sinkronisasi Google Calendar & .ICS • Unggah Berkas PDF & Gambar
+            Sinkronisasi Cloud Real-Time HP &amp; Komputer • Pengingat Otomatis • Unggah Berkas PDF &amp; Gambar
           </p>
         </div>
       </footer>

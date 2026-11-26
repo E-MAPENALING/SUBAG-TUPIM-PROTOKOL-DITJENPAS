@@ -1,0 +1,409 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Verified user root profile document for SUBAG TU PIM & PROTOKOL DITJENPAS workspace.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 150
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "email", "displayName", "createdAt", "updatedAt"]
+    },
+    "AgendaItem": {
+      "title": "AgendaItem",
+      "description": "Monthly leadership agenda entry synchronized across phone and computer.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "leader": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "leaderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "companions": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "startTime": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 5,
+          "pattern": "^\\d{2}:\\d{2}$"
+        },
+        "endTime": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 5,
+          "pattern": "^\\d{2}:\\d{2}$"
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "virtualMeetingUrl": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "dressCode": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["VIP", "Tinggi", "Sedang", "Rutin"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Terjadwal", "Berlangsung", "Selesai", "Ditunda", "Dibatalkan"]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 3000
+        },
+        "documents": {
+          "type": "array",
+          "description": "Bounded attachment metadata list (max 15 items; binary data stored in attachmentChunks)."
+        },
+        "reminder": {
+          "type": "object",
+          "description": "Reminder settings map."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "title",
+        "category",
+        "leader",
+        "leaderName",
+        "date",
+        "startTime",
+        "endTime",
+        "location",
+        "priority",
+        "status",
+        "documents",
+        "reminder",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DailyJournalEntry": {
+      "title": "DailyJournalEntry",
+      "description": "Daily protocol activity journal entry.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "time": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 5,
+          "pattern": "^\\d{2}:\\d{2}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "relatedAgendaId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "relatedAgendaTitle": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "leaderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "reporterName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "reporterRole": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 6000
+        },
+        "followUp": {
+          "type": "string",
+          "maxLength": 3000
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["Lancar & Kondusif", "Perlu Tindak Lanjut", "Ada Kendala", "Selesai Dilaporkan"]
+        },
+        "documents": {
+          "type": "array",
+          "description": "Bounded attachment metadata list (max 15 items)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "date",
+        "time",
+        "title",
+        "leaderName",
+        "location",
+        "reporterName",
+        "reporterRole",
+        "summary",
+        "outcome",
+        "documents",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "HolidayDutyEntry": {
+      "title": "HolidayDutyEntry",
+      "description": "Holiday protocol duty roster entry.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "date": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 10,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "holidayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "dayType": {
+          "type": "string",
+          "enum": [
+            "Akhir Pekan (Sabtu/Minggu)",
+            "Libur Nasional",
+            "Cuti Bersama",
+            "Hari Besar Keagamaan"
+          ]
+        },
+        "shift": {
+          "type": "string",
+          "enum": [
+            "Standby Penuh (24 Jam)",
+            "Shift Pagi (07:30 - 14:00)",
+            "Shift Siang/Sore (14:00 - 20:00)"
+          ]
+        },
+        "coordinatorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 150
+        },
+        "coordinatorPhone": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "officers": {
+          "type": "array",
+          "description": "Bounded list of protocol officers on duty (max 30)."
+        },
+        "standbyLocation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 250
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "ownerId",
+        "date",
+        "holidayName",
+        "dayType",
+        "shift",
+        "coordinatorName",
+        "officers",
+        "standbyLocation",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "AttachmentChunk": {
+      "title": "AttachmentChunk",
+      "description": "Chunked PDF/image attachment payload segment (max 600KB per chunk to stay safely under Firestore 1MB limit).",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "attachmentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "chunkIndex": {
+          "type": "number"
+        },
+        "totalChunks": {
+          "type": "number"
+        },
+        "data": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["ownerId", "attachmentId", "chunkIndex", "totalChunks", "data", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private root profile for each verified user."
+    },
+    "/users/{userId}/agendas/{agendaId}": {
+      "schema": { "$ref": "#/entities/AgendaItem" },
+      "description": "User-owned leadership agendas synchronized in real time across devices."
+    },
+    "/users/{userId}/journals/{journalId}": {
+      "schema": { "$ref": "#/entities/DailyJournalEntry" },
+      "description": "User-owned daily activity journals synchronized in real time across devices."
+    },
+    "/users/{userId}/holidayDuties/{dutyId}": {
+      "schema": { "$ref": "#/entities/HolidayDutyEntry" },
+      "description": "User-owned holiday protocol duty schedules synchronized in real time across devices."
+    },
+    "/users/{userId}/attachmentChunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/AttachmentChunk" },
+      "description": "Chunked PDF and image attachment data for agendas and journals."
+    }
+  }
+}

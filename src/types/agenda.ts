@@ -25,8 +25,9 @@ export interface DocumentAttachment {
   name: string;
   size: number; // in bytes
   type: string; // 'application/pdf' | 'image/png' | 'image/jpeg' | etc.
-  dataUrl: string; // Base64 data URL for preview and download
+  dataUrl: string; // Base64 data URL for preview and download (may be lazy-loaded from cloud chunks)
   uploadedAt: string;
+  chunkCount?: number; // Number of Firestore attachment chunks when stored in cloud
 }
 
 export interface ReminderConfig {

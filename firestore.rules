@@ -1,0 +1,365 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 0: Global default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==================== GLOBAL PRIMITIVES ====================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isVerifiedOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'regbimpaslpbrebes@gmail.com' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function userProfileExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function isValidOptionalString(data, field, maxLen) {
+      return !(field in data) || (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    function isValidDateStr(val) {
+      return val is string && val.size() == 10 && val.matches('^\\d{4}-\\d{2}-\\d{2}$');
+    }
+
+    function isValidTimeStr(val) {
+      return val is string && val.size() == 5 && val.matches('^\\d{2}:\\d{2}$');
+    }
+
+    function isValidDocumentList(listVal) {
+      return listVal is list
+        && listVal.size() <= 15
+        && (listVal.size() == 0 || (listVal[0] is map && listVal[0].keys().hasAll(['id', 'name', 'size', 'type', 'uploadedAt'])));
+    }
+
+    function isValidOfficerList(listVal) {
+      return listVal is list
+        && listVal.size() >= 1
+        && listVal.size() <= 30
+        && listVal[0] is map
+        && listVal[0].keys().hasAll(['id', 'name', 'role', 'phone']);
+    }
+
+    function isValidReminderMap(rem) {
+      return rem is map
+        && rem.keys().hasAll(['enabled', 'minutesBefore', 'soundEnabled'])
+        && rem.keys().hasOnly(['enabled', 'minutesBefore', 'soundEnabled', 'triggered', 'lastNotified', 'snoozedUntil'])
+        && rem.enabled is bool
+        && rem.soundEnabled is bool
+        && rem.minutesBefore is number
+        && rem.minutesBefore >= 0
+        && rem.minutesBefore <= 10080
+        && (!('triggered' in rem) || rem.triggered is bool)
+        && (!('lastNotified' in rem) || (rem.lastNotified is string && rem.lastNotified.size() <= 64))
+        && (!('snoozedUntil' in rem) || rem.snoozedUntil == null || rem.snoozedUntil is number);
+    }
+
+    // ==================== VALIDATION BLUEPRINTS ====================
+
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['ownerId', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 150
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAgenda(data, userId, agendaId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'title', 'category', 'leader', 'leaderName',
+          'date', 'startTime', 'endTime', 'location', 'priority', 'status',
+          'documents', 'reminder', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'title', 'category', 'leader', 'leaderName',
+          'companions', 'date', 'startTime', 'endTime', 'location',
+          'virtualMeetingUrl', 'dressCode', 'priority', 'status', 'notes',
+          'documents', 'reminder', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == agendaId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 80
+        && data.leader is string && data.leader.size() >= 1 && data.leader.size() <= 80
+        && data.leaderName is string && data.leaderName.size() >= 1 && data.leaderName.size() <= 150
+        && isValidOptionalString(data, 'companions', 400)
+        && isValidDateStr(data.date)
+        && isValidTimeStr(data.startTime)
+        && isValidTimeStr(data.endTime)
+        && data.location is string && data.location.size() <= 300
+        && isValidOptionalString(data, 'virtualMeetingUrl', 500)
+        && isValidOptionalString(data, 'dressCode', 160)
+        && data.priority in ['VIP', 'Tinggi', 'Sedang', 'Rutin']
+        && data.status in ['Terjadwal', 'Berlangsung', 'Selesai', 'Ditunda', 'Dibatalkan']
+        && isValidOptionalString(data, 'notes', 3000)
+        && isValidDocumentList(data.documents)
+        && isValidReminderMap(data.reminder)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidJournal(data, userId, journalId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'date', 'time', 'title', 'leaderName',
+          'location', 'reporterName', 'reporterRole', 'summary',
+          'outcome', 'documents', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'date', 'time', 'title',
+          'relatedAgendaId', 'relatedAgendaTitle', 'leaderName',
+          'location', 'reporterName', 'reporterRole', 'summary',
+          'followUp', 'outcome', 'documents', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == journalId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidDateStr(data.date)
+        && isValidTimeStr(data.time)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && isValidOptionalString(data, 'relatedAgendaId', 128)
+        && isValidOptionalString(data, 'relatedAgendaTitle', 300)
+        && data.leaderName is string && data.leaderName.size() >= 1 && data.leaderName.size() <= 150
+        && data.location is string && data.location.size() <= 300
+        && data.reporterName is string && data.reporterName.size() >= 1 && data.reporterName.size() <= 150
+        && data.reporterRole is string && data.reporterRole.size() >= 1 && data.reporterRole.size() <= 120
+        && data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 6000
+        && isValidOptionalString(data, 'followUp', 3000)
+        && data.outcome in ['Lancar & Kondusif', 'Perlu Tindak Lanjut', 'Ada Kendala', 'Selesai Dilaporkan']
+        && isValidDocumentList(data.documents)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHolidayDuty(data, userId, dutyId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'date', 'holidayName', 'dayType', 'shift',
+          'coordinatorName', 'officers', 'standbyLocation', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'date', 'holidayName', 'dayType', 'shift',
+          'coordinatorName', 'coordinatorPhone', 'officers', 'standbyLocation',
+          'notes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == dutyId
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidDateStr(data.date)
+        && data.holidayName is string && data.holidayName.size() >= 1 && data.holidayName.size() <= 200
+        && data.dayType in ['Akhir Pekan (Sabtu/Minggu)', 'Libur Nasional', 'Cuti Bersama', 'Hari Besar Keagamaan']
+        && data.shift in ['Standby Penuh (24 Jam)', 'Shift Pagi (07:30 - 14:00)', 'Shift Siang/Sore (14:00 - 20:00)']
+        && data.coordinatorName is string && data.coordinatorName.size() >= 1 && data.coordinatorName.size() <= 150
+        && isValidOptionalString(data, 'coordinatorPhone', 40)
+        && isValidOfficerList(data.officers)
+        && data.standbyLocation is string && data.standbyLocation.size() >= 1 && data.standbyLocation.size() <= 250
+        && isValidOptionalString(data, 'notes', 2000)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAttachmentChunk(data, userId) {
+      return data.keys().hasAll(['ownerId', 'attachmentId', 'chunkIndex', 'totalChunks', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'attachmentId', 'chunkIndex', 'totalChunks', 'data', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && data.ownerId == userId
+        && isValidId(data.attachmentId)
+        && data.chunkIndex is number && data.chunkIndex >= 0 && data.chunkIndex < 30
+        && data.totalChunks is number && data.totalChunks >= 1 && data.totalChunks <= 30
+        && data.data is string && data.data.size() >= 1 && data.data.size() <= 600000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // ==================== COLLECTION RULES ====================
+
+    match /users/{userId} {
+      allow get: if isVerifiedOwner(userId) && isValidId(userId) && (resource == null || existing().ownerId == request.auth.uid);
+      allow list: if false;
+      allow create: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt']);
+      allow delete: if false;
+
+      // Leadership Agendas
+      match /agendas/{agendaId} {
+        allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(agendaId) && (resource == null || existing().ownerId == request.auth.uid);
+        allow list: if isVerifiedOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(agendaId)
+          && isValidAgenda(incoming(), userId, agendaId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && userProfileExists(userId);
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(agendaId)
+          && isValidAgenda(incoming(), userId, agendaId)
+          && existing().ownerId == request.auth.uid
+          && incoming().ownerId == existing().ownerId
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && userProfileExists(userId)
+          && (existing().status != 'Dibatalkan' || isAdmin())
+          && (
+            // Action 1: Quick status update
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
+            // Action 2: Reminder snooze / trigger update
+            incoming().diff(existing()).affectedKeys().hasOnly(['reminder', 'updatedAt']) ||
+            // Action 3: Full agenda edit by owner
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'category', 'leader', 'leaderName', 'companions',
+              'date', 'startTime', 'endTime', 'location', 'virtualMeetingUrl',
+              'dressCode', 'priority', 'status', 'notes', 'documents', 'reminder', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(agendaId)
+          && existing().ownerId == request.auth.uid
+          && userProfileExists(userId);
+      }
+
+      // Daily Activity Journals
+      match /journals/{journalId} {
+        allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(journalId) && (resource == null || existing().ownerId == request.auth.uid);
+        allow list: if isVerifiedOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(journalId)
+          && isValidJournal(incoming(), userId, journalId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && userProfileExists(userId);
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(journalId)
+          && isValidJournal(incoming(), userId, journalId)
+          && existing().ownerId == request.auth.uid
+          && incoming().ownerId == existing().ownerId
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && userProfileExists(userId)
+          && (existing().outcome != 'Selesai Dilaporkan' || isAdmin())
+          && (
+            // Action 1: Outcome status update
+            incoming().diff(existing()).affectedKeys().hasOnly(['outcome', 'updatedAt']) ||
+            // Action 2: Full journal edit by owner
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'date', 'time', 'title', 'relatedAgendaId', 'relatedAgendaTitle',
+              'leaderName', 'location', 'reporterName', 'reporterRole',
+              'summary', 'followUp', 'outcome', 'documents', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(journalId)
+          && existing().ownerId == request.auth.uid
+          && userProfileExists(userId);
+      }
+
+      // Holiday Protocol Duty Rosters
+      match /holidayDuties/{dutyId} {
+        allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(dutyId) && (resource == null || existing().ownerId == request.auth.uid);
+        allow list: if isVerifiedOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(dutyId)
+          && isValidHolidayDuty(incoming(), userId, dutyId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && userProfileExists(userId);
+        allow update: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(dutyId)
+          && isValidHolidayDuty(incoming(), userId, dutyId)
+          && existing().ownerId == request.auth.uid
+          && incoming().ownerId == existing().ownerId
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && userProfileExists(userId)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'date', 'holidayName', 'dayType', 'shift', 'coordinatorName',
+            'coordinatorPhone', 'officers', 'standbyLocation', 'notes', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(dutyId)
+          && existing().ownerId == request.auth.uid
+          && userProfileExists(userId);
+      }
+
+      // Chunked PDF / Image Attachments
+      match /attachmentChunks/{chunkId} {
+        allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(chunkId) && (resource == null || existing().ownerId == request.auth.uid);
+        allow list: if isVerifiedOwner(userId) && existing().ownerId == request.auth.uid;
+        allow create: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(chunkId)
+          && isValidAttachmentChunk(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && userProfileExists(userId);
+        allow update: if false;
+        allow delete: if isVerifiedOwner(userId)
+          && isValidId(userId)
+          && isValidId(chunkId)
+          && existing().ownerId == request.auth.uid
+          && userProfileExists(userId);
+      }
+    }
+  }
+}

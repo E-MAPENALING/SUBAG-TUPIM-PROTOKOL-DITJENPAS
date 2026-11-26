@@ -1,11 +1,12 @@
 import { AgendaItem, DailyJournalEntry, HolidayDutyEntry } from '../types/agenda';
 
 const DB_NAME = 'AgendaPimpinanDB';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_AGENDAS = 'agendas';
 const STORE_JOURNALS = 'journals';
 const STORE_HOLIDAY_DUTIES = 'holiday_duties';
 const STORE_PENDING_OPS = 'pending_ops';
+const STORE_ATTACHMENT_CACHE = 'attachment_cache';
 
 export interface StoredPendingOp {
   opId?: number;
@@ -45,6 +46,9 @@ function openDatabase(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_PENDING_OPS)) {
         db.createObjectStore(STORE_PENDING_OPS, { keyPath: 'opId', autoIncrement: true });
+      }
+      if (!db.objectStoreNames.contains(STORE_ATTACHMENT_CACHE)) {
+        db.createObjectStore(STORE_ATTACHMENT_CACHE, { keyPath: 'id' });
       }
     };
 
@@ -348,5 +352,59 @@ export async function deletePendingOpFromDB(opId: number): Promise<void> {
     });
   } catch (error) {
     console.error('Gagal menghapus antrean sinkronisasi dari IndexedDB:', error);
+  }
+}
+
+// ==================== ATTACHMENT DATA CACHE ====================
+
+export async function getCachedAttachmentDataUrl(id: string): Promise<string | null> {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_ATTACHMENT_CACHE, 'readonly');
+      const store = tx.objectStore(STORE_ATTACHMENT_CACHE);
+      const request = store.get(id);
+
+      request.onsuccess = () => {
+        const result = request.result as { id: string; dataUrl: string } | undefined;
+        resolve(result?.dataUrl || null);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function saveCachedAttachmentDataUrl(id: string, dataUrl: string): Promise<void> {
+  if (!id || !dataUrl) return;
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_ATTACHMENT_CACHE, 'readwrite');
+      const store = tx.objectStore(STORE_ATTACHMENT_CACHE);
+      store.put({ id, dataUrl });
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (error) {
+    console.warn('Gagal menyimpan cache lampiran ke IndexedDB:', error);
+  }
+}
+
+export async function deleteCachedAttachmentDataUrl(id: string): Promise<void> {
+  try {
+    const db = await openDatabase();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_ATTACHMENT_CACHE, 'readwrite');
+      const store = tx.objectStore(STORE_ATTACHMENT_CACHE);
+      store.delete(id);
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // ignore cache cleanup error
   }
 }

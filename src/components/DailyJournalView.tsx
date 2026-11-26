@@ -540,14 +540,24 @@ export const DailyJournalView: React.FC<DailyJournalViewProps> = ({
                                   <span className="truncate">{doc.name}</span>
                                   <ExternalLink className="w-3 h-3 shrink-0" />
                                 </button>
-                                <a
-                                  href={doc.dataUrl}
-                                  download={doc.name}
-                                  className="text-purple-600 hover:text-purple-900 pl-1 border-l border-purple-200"
-                                  title="Unduh"
-                                >
-                                  <Download className="w-3 h-3" />
-                                </a>
+                                {doc.dataUrl ? (
+                                  <a
+                                    href={doc.dataUrl}
+                                    download={doc.name}
+                                    className="text-purple-600 hover:text-purple-900 pl-1 border-l border-purple-200"
+                                    title="Unduh"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                  </a>
+                                ) : (
+                                  <button
+                                    onClick={() => onPreviewDocument(doc)}
+                                    className="text-purple-600 hover:text-purple-900 pl-1 border-l border-purple-200"
+                                    title="Buka & Unduh dari Cloud"
+                                  >
+                                    <Download className="w-3 h-3" />
+                                  </button>
+                                )}
                               </div>
                             ))}
                           </div>

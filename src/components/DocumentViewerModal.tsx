@@ -1,19 +1,25 @@
 import React from 'react';
-import { X, Download, ExternalLink, FileText, Image as ImageIcon, ZoomIn, ZoomOut } from 'lucide-react';
+import { X, Download, ExternalLink, FileText, Image as ImageIcon, ZoomIn, ZoomOut, Loader2 } from 'lucide-react';
 import { DocumentAttachment } from '../types/agenda';
 
 interface DocumentViewerModalProps {
   document: DocumentAttachment | null;
+  isLoading?: boolean;
   onClose: () => void;
 }
 
-export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({ document: doc, onClose }) => {
+export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
+  document: doc,
+  isLoading = false,
+  onClose
+}) => {
   const [zoomLevel, setZoomLevel] = React.useState<number>(100);
 
   if (!doc) return null;
 
   const isPdf = doc.type === 'application/pdf' || doc.name.toLowerCase().endsWith('.pdf');
   const isImage = doc.type.startsWith('image/') || /\.(png|jpe?g|webp|svg|gif)$/i.test(doc.name);
+  const hasData = Boolean(doc.dataUrl);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`;
@@ -22,6 +28,7 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({ docume
   };
 
   const handleDownload = () => {
+    if (!doc.dataUrl) return;
     const link = window.document.createElement('a');
     link.href = doc.dataUrl;
     link.download = doc.name;
@@ -31,23 +38,22 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({ docume
   };
 
   const handleOpenInNewTab = () => {
-    const newWindow = window.open();
-    if (newWindow) {
-      if (isPdf) {
-        newWindow.document.write(
-          `<title>${doc.name}</title><iframe src="${doc.dataUrl}" frameborder="0" style="border:0; top:0px; left:0px; bottom:0px; right:0px; width:100%; height:100%;" allowfullscreen></iframe>`
-        );
-      } else {
-        newWindow.document.write(
-          `<title>${doc.name}</title><body style="margin:0; background:#0f172a; display:flex; justify-content:center; align-items:center; min-height:100vh;"><img src="${doc.dataUrl}" style="max-width:90%; max-height:90vh; object-fit:contain; border-radius:8px; box-shadow:0 10px 25px rgba(0,0,0,0.5);" /></body>`
-        );
-      }
-    }
+    if (!doc.dataUrl) return;
+    const link = window.document.createElement('a');
+    link.href = doc.dataUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    window.document.body.appendChild(link);
+    link.click();
+    window.document.body.removeChild(link);
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div 
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/80 backdrop-blur-sm animate-in fade-in duration-200"
+      onClick={onClose}
+    >
+      <div
         className="relative w-full max-w-5xl h-[90vh] bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-slate-200"
         onClick={(e) => e.stopPropagation()}
       >
@@ -67,10 +73,10 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({ docume
 
           {/* Action buttons */}
           <div className="flex items-center gap-2 shrink-0">
-            {isImage && (
+            {isImage && hasData && (
               <div className="hidden sm:flex items-center gap-1 bg-slate-800 px-2 py-1 rounded-lg border border-slate-700 text-xs text-slate-300">
                 <button
-                  onClick={() => setZoomLevel(prev => Math.max(50, prev - 25))}
+                  onClick={() => setZoomLevel((prev) => Math.max(50, prev - 25))}
                   className="p-1 hover:text-white transition"
                   title="Perkecil"
                 >
@@ -78,7 +84,7 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({ docume
                 </button>
                 <span className="w-12 text-center font-mono">{zoomLevel}%</span>
                 <button
-                  onClick={() => setZoomLevel(prev => Math.min(250, prev + 25))}
+                  onClick={() => setZoomLevel((prev) => Math.min(250, prev + 25))}
                   className="p-1 hover:text-white transition"
                   title="Perbesar"
                 >
@@ -89,7 +95,8 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({ docume
 
             <button
               onClick={handleOpenInNewTab}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
+              disabled={!hasData || isLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 transition"
               title="Buka Tab Baru"
             >
               <ExternalLink className="w-3.5 h-3.5" />
@@ -98,7 +105,8 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({ docume
 
             <button
               onClick={handleDownload}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white transition shadow-sm"
+              disabled={!hasData || isLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white transition shadow-sm"
               title="Unduh Berkas"
             >
               <Download className="w-3.5 h-3.5" />
@@ -117,7 +125,21 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({ docume
 
         {/* Content Viewer */}
         <div className="flex-1 bg-slate-100 overflow-auto p-4 flex items-center justify-center">
-          {isPdf ? (
+          {isLoading ? (
+            <div className="text-center p-8 bg-white rounded-2xl shadow border border-slate-200 max-w-sm space-y-3">
+              <Loader2 className="w-10 h-10 mx-auto text-blue-600 animate-spin" />
+              <p className="text-sm font-semibold text-slate-800">Memuat berkas dari Cloud...</p>
+              <p className="text-xs text-slate-500">Sedang mengunduh lampiran agar dapat ditampilkan.</p>
+            </div>
+          ) : !hasData ? (
+            <div className="text-center p-8 bg-white rounded-2xl shadow border border-slate-200 max-w-md space-y-2">
+              <FileText className="w-14 h-14 mx-auto text-slate-400" />
+              <h4 className="font-semibold text-slate-800">{doc.name}</h4>
+              <p className="text-xs text-slate-500">
+                Isi lampiran belum tersedia di perangkat ini. Pastikan Anda sudah masuk dengan akun Google yang sama untuk mengunduhnya.
+              </p>
+            </div>
+          ) : isPdf ? (
             <div className="w-full h-full bg-white rounded-xl shadow-inner border border-slate-300 overflow-hidden flex flex-col">
               <iframe
                 src={`${doc.dataUrl}#toolbar=1`}
