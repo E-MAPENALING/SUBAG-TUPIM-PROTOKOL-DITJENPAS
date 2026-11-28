@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { AgendaItem, AgendaStatus, DocumentAttachment } from '../types/agenda';
 import { generateGoogleCalendarUrl, downloadIcsFile, generateWhatsAppShareText, formatDateIndo } from '../utils/calendarSync';
+import { getLocalDateIso } from '../utils/firestoreSync';
 
 interface AgendaListViewProps {
   agendas: AgendaItem[];
@@ -28,7 +29,7 @@ export const AgendaListView: React.FC<AgendaListViewProps> = ({
 }) => {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getLocalDateIso();
 
   const handleDownloadPdfClick = async (doc: DocumentAttachment, agenda: AgendaItem) => {
     setDownloadingDocId(doc.id);
@@ -89,7 +90,7 @@ export const AgendaListView: React.FC<AgendaListViewProps> = ({
         return (
           <div key={dateStr} className="space-y-3">
             {/* Date Section Header */}
-            <div className="flex items-center gap-3 sticky top-28 z-20 bg-slate-50/95 backdrop-blur-sm py-2">
+            <div className="flex items-center gap-3 lg:sticky lg:top-[120px] z-20 bg-slate-50/95 backdrop-blur-sm py-2">
               <div className={`p-2 rounded-xl text-xs font-bold ${
                 isToday ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-800 text-slate-200'
               }`}>
@@ -266,7 +267,7 @@ export const AgendaListView: React.FC<AgendaListViewProps> = ({
                                 return (
                                   <div
                                     key={doc.id}
-                                    className="inline-flex items-center gap-2 p-1.5 pr-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition shadow-2xs group"
+                                    className="flex flex-wrap sm:inline-flex items-center justify-between gap-2 p-2 sm:p-1.5 sm:pr-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition shadow-2xs group w-full sm:w-auto"
                                   >
                                     {isImg && doc.dataUrl ? (
                                       <img
@@ -324,7 +325,7 @@ export const AgendaListView: React.FC<AgendaListViewProps> = ({
                       </div>
 
                       {/* Right: Action Buttons */}
-                      <div className="flex flex-row lg:flex-col items-center lg:items-stretch gap-2 shrink-0 pt-3 lg:pt-0 border-t lg:border-t-0 lg:border-l border-slate-100 lg:pl-4">
+                      <div className="grid grid-cols-2 sm:grid-cols-4 lg:flex lg:flex-col items-stretch gap-2 shrink-0 pt-3 lg:pt-0 border-t lg:border-t-0 lg:border-l border-slate-100 lg:pl-4 lg:min-w-[165px]">
                         {/* Sync to Google Calendar */}
                         <a
                           href={googleCalUrl}

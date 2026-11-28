@@ -37,11 +37,14 @@ import {
   saveCachedAttachmentDataUrl
 } from './indexedDb';
 
+export const SHARED_WORKSPACE_ID = 'ditjenpas_utama';
+const SHARED_VISIBILITY = 'shared_unit';
+const DEFAULT_UNIT_NAME = 'SUBAG TU PIM & PROTOKOL DITJENPAS';
+
 const CHUNK_SIZE = 480_000;
 const MAX_CHUNKS = 30;
 const MAX_DOCUMENTS = 15;
 const MAX_OFFICERS = 30;
-const MAX_SHARED_EMAILS = 15;
 
 const VALID_PRIORITIES: Priority[] = ['VIP', 'Tinggi', 'Sedang', 'Rutin'];
 const VALID_STATUSES: AgendaStatus[] = ['Terjadwal', 'Berlangsung', 'Selesai', 'Ditunda', 'Dibatalkan'];
@@ -63,19 +66,17 @@ const VALID_SHIFTS: DutyShift[] = [
   'Shift Siang/Sore (14:00 - 20:00)'
 ];
 
-export interface WorkspaceTarget {
-  ownerUid: string;
-  viewerUid: string;
-  viewerEmail: string;
-  sharedEmails: string[];
+export interface SharedWorkspaceConfig {
+  workspaceId: string;
+  ownerId: string;
+  unitName: string;
+  customLogo: string;
 }
 
-export interface WorkspaceProfileData {
-  ownerId: string;
-  email: string;
-  displayName: string;
-  sharedEmails: string[];
-  customLogo: string;
+export interface SharedWorkspaceActor {
+  workspaceId: string;
+  viewerUid: string;
+  viewerEmail: string;
 }
 
 function sanitizeId(raw: string | undefined, prefix: string): string {
@@ -93,11 +94,18 @@ function clampString(val: string | undefined, maxLen: number, fallback = ''): st
   return str.slice(0, maxLen);
 }
 
+export function getLocalDateIso(dateObj: Date = new Date()): string {
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const d = String(dateObj.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function sanitizeDate(val: string | undefined): string {
   if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(val.trim())) {
     return val.trim();
   }
-  return new Date().toISOString().slice(0, 10);
+  return getLocalDateIso();
 }
 
 function sanitizeTime(val: string | undefined, fallback = '08:00'): string {
@@ -105,20 +113,6 @@ function sanitizeTime(val: string | undefined, fallback = '08:00'): string {
     return val.trim();
   }
   return fallback;
-}
-
-export function sanitizeEmailList(emails: string[] | undefined): string[] {
-  if (!Array.isArray(emails)) return [];
-  const unique = new Set<string>();
-  for (const raw of emails) {
-    if (typeof raw !== 'string') continue;
-    const cleaned = raw.trim().toLowerCase().slice(0, 254);
-    if (cleaned.length >= 3 && cleaned.includes('@')) {
-      unique.add(cleaned);
-    }
-    if (unique.size >= MAX_SHARED_EMAILS) break;
-  }
-  return Array.from(unique);
 }
 
 function timestampToIso(val: unknown): string {
@@ -178,72 +172,65 @@ function sanitizeOfficers(officers: ProtocolOfficer[] | undefined, fallbackName:
   return valid;
 }
 
-function buildCollectionQuery(
-  target: WorkspaceTarget,
+function buildSharedCollectionQuery(
+  workspaceId: string,
   subcollection: 'agendas' | 'journals' | 'holidayDuties'
 ) {
-  const colRef = collection(db, 'users', target.ownerUid, subcollection);
-  if (target.ownerUid === target.viewerUid) {
-    return query(colRef, where('ownerId', '==', target.ownerUid));
-  }
-  return query(colRef, where('sharedEmails', 'array-contains', target.viewerEmail.trim().toLowerCase()));
+  const colRef = collection(db, 'workspaces', workspaceId, subcollection);
+  return query(
+    colRef,
+    where('workspaceId', '==', workspaceId),
+    where('visibility', '==', SHARED_VISIBILITY)
+  );
 }
 
-// ==================== USER PROFILE & WORKSPACE ACCESS ====================
+// ==================== SHARED WORKSPACE PROFILE & LOGO ====================
 
-export async function ensureUserProfile(user: User): Promise<{
-  isNewProfile: boolean;
-  profile: WorkspaceProfileData;
+export async function ensureSharedWorkspace(user: User): Promise<{
+  isNewWorkspace: boolean;
+  config: SharedWorkspaceConfig;
 }> {
-  const path = `users/${user.uid}`;
-  const userRef = doc(db, 'users', user.uid);
-  const email = clampString(user.email?.toLowerCase() || '', 254, 'user@example.com');
-  const displayName = clampString(user.displayName || user.email?.split('@')[0] || 'Pengguna', 150, 'Pengguna');
+  const path = `workspaces/${SHARED_WORKSPACE_ID}`;
+  const wsRef = doc(db, 'workspaces', SHARED_WORKSPACE_ID);
 
   try {
-    const snap = await getDoc(userRef);
+    let snap;
+    try {
+      snap = await getDocFromServer(wsRef);
+    } catch {
+      snap = await getDoc(wsRef);
+    }
+
     if (!snap.exists()) {
-      await setDoc(userRef, {
+      await setDoc(wsRef, {
+        workspaceId: SHARED_WORKSPACE_ID,
         ownerId: user.uid,
-        email,
-        displayName,
-        sharedEmails: [],
+        unitName: DEFAULT_UNIT_NAME,
         customLogo: '',
+        visibility: SHARED_VISIBILITY,
+        updatedBy: user.uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
       return {
-        isNewProfile: true,
-        profile: {
+        isNewWorkspace: true,
+        config: {
+          workspaceId: SHARED_WORKSPACE_ID,
           ownerId: user.uid,
-          email,
-          displayName,
-          sharedEmails: [],
+          unitName: DEFAULT_UNIT_NAME,
           customLogo: ''
         }
       };
     }
 
-    const existingData = snap.data();
-    if (existingData.email !== email || existingData.displayName !== displayName) {
-      try {
-        await updateDoc(userRef, {
-          email,
-          displayName,
-          updatedAt: serverTimestamp()
-        });
-      } catch (updateErr) {
-        console.warn('Sinkronisasi metadata profil dilewati:', updateErr);
-      }
-    }
+    const data = snap.data();
     return {
-      isNewProfile: false,
-      profile: {
-        ownerId: String(existingData.ownerId || user.uid),
-        email: String(existingData.email || email),
-        displayName: String(existingData.displayName || displayName),
-        sharedEmails: sanitizeEmailList(existingData.sharedEmails as string[] | undefined),
-        customLogo: typeof existingData.customLogo === 'string' ? existingData.customLogo : ''
+      isNewWorkspace: false,
+      config: {
+        workspaceId: String(data.workspaceId || SHARED_WORKSPACE_ID),
+        ownerId: String(data.ownerId || user.uid),
+        unitName: String(data.unitName || DEFAULT_UNIT_NAME),
+        customLogo: typeof data.customLogo === 'string' ? data.customLogo : ''
       }
     };
   } catch (error) {
@@ -251,66 +238,22 @@ export async function ensureUserProfile(user: User): Promise<{
   }
 }
 
-export async function verifyWorkspaceAccess(
-  ownerUid: string,
-  viewerUid: string,
-  viewerEmail: string
-): Promise<{ ok: boolean; profile?: WorkspaceProfileData; reason?: string }> {
-  const cleanOwnerUid = ownerUid.trim();
-  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(cleanOwnerUid)) {
-    return { ok: false, reason: 'ID Ruang Kerja tidak valid.' };
-  }
-  const userRef = doc(db, 'users', cleanOwnerUid);
-  try {
-    const snap = await getDocFromServer(userRef);
-    if (!snap.exists()) {
-      return { ok: false, reason: 'Ruang kerja tidak ditemukan.' };
-    }
-    const data = snap.data();
-    const sharedEmails = sanitizeEmailList(data.sharedEmails as string[] | undefined);
-    const normalizedViewer = viewerEmail.trim().toLowerCase();
-    const allowed = cleanOwnerUid === viewerUid || sharedEmails.includes(normalizedViewer);
-    if (!allowed) {
-      return {
-        ok: false,
-        reason: `Email ${normalizedViewer} belum diizinkan pada ruang kerja tersebut. Tambahkan email ini terlebih dahulu di menu HP ↔ PC pada perangkat pemilik.`
-      };
-    }
-    return {
-      ok: true,
-      profile: {
-        ownerId: String(data.ownerId || cleanOwnerUid),
-        email: String(data.email || ''),
-        displayName: String(data.displayName || ''),
-        sharedEmails,
-        customLogo: typeof data.customLogo === 'string' ? data.customLogo : ''
-      }
-    };
-  } catch {
-    return {
-      ok: false,
-      reason: `Akses ditolak. Pastikan pemilik ruang kerja telah menambahkan email ${viewerEmail.trim().toLowerCase()} di daftar Email HP/Tim yang diizinkan.`
-    };
-  }
-}
-
-export function subscribeWorkspaceProfile(
-  ownerUid: string,
-  onProfile: (profile: WorkspaceProfileData) => void,
+export function subscribeSharedWorkspace(
+  onConfig: (config: SharedWorkspaceConfig) => void,
   onError: (err: Error) => void
 ): () => void {
-  const path = `users/${ownerUid}`;
-  const userRef = doc(db, 'users', ownerUid);
+  const path = `workspaces/${SHARED_WORKSPACE_ID}`;
+  const wsRef = doc(db, 'workspaces', SHARED_WORKSPACE_ID);
+
   return onSnapshot(
-    userRef,
+    wsRef,
     (snap) => {
       if (!snap.exists()) return;
       const data = snap.data();
-      onProfile({
-        ownerId: String(data.ownerId || ownerUid),
-        email: String(data.email || ''),
-        displayName: String(data.displayName || ''),
-        sharedEmails: sanitizeEmailList(data.sharedEmails as string[] | undefined),
+      onConfig({
+        workspaceId: String(data.workspaceId || SHARED_WORKSPACE_ID),
+        ownerId: String(data.ownerId || ''),
+        unitName: String(data.unitName || DEFAULT_UNIT_NAME),
         customLogo: typeof data.customLogo === 'string' ? data.customLogo : ''
       });
     },
@@ -324,61 +267,19 @@ export function subscribeWorkspaceProfile(
   );
 }
 
-export async function saveWorkspaceCustomLogo(ownerUid: string, logoDataUrl: string): Promise<void> {
-  const path = `users/${ownerUid}`;
-  const userRef = doc(db, 'users', ownerUid);
+export async function saveSharedWorkspaceLogo(viewerUid: string, logoDataUrl: string): Promise<void> {
+  const path = `workspaces/${SHARED_WORKSPACE_ID}`;
+  const wsRef = doc(db, 'workspaces', SHARED_WORKSPACE_ID);
   const clamped = logoDataUrl ? logoDataUrl.slice(0, 450_000) : '';
   try {
-    await updateDoc(userRef, {
+    await updateDoc(wsRef, {
       customLogo: clamped,
+      updatedBy: viewerUid,
       updatedAt: serverTimestamp()
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
-}
-
-export async function updateWorkspaceSharedEmails(
-  ownerUid: string,
-  rawEmails: string[]
-): Promise<string[]> {
-  const normalized = sanitizeEmailList(rawEmails);
-  const profilePath = `users/${ownerUid}`;
-  try {
-    await updateDoc(doc(db, 'users', ownerUid), {
-      sharedEmails: normalized,
-      updatedAt: serverTimestamp()
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, profilePath);
-  }
-
-  // Mirror sharedEmails to existing subcollection docs so collaborators' list queries include all records
-  const subcollections: Array<'agendas' | 'journals' | 'holidayDuties'> = [
-    'agendas',
-    'journals',
-    'holidayDuties'
-  ];
-  for (const sub of subcollections) {
-    const colPath = `users/${ownerUid}/${sub}`;
-    try {
-      const snaps = await getDocs(query(collection(db, 'users', ownerUid, sub), where('ownerId', '==', ownerUid)));
-      for (const docSnap of snaps.docs) {
-        try {
-          await updateDoc(docSnap.ref, {
-            sharedEmails: normalized,
-            updatedAt: serverTimestamp()
-          });
-        } catch {
-          // Skip terminal locked records for non-admin owners without aborting the allowlist sync
-        }
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, colPath);
-    }
-  }
-
-  return normalized;
 }
 
 // ==================== CHUNKED ATTACHMENT STORAGE ====================
@@ -392,15 +293,14 @@ interface CloudDocumentMeta {
   chunkCount: number;
 }
 
-async function prepareDocumentsForCloud(
-  target: WorkspaceTarget,
+async function prepareDocumentsForSharedCloud(
+  actor: SharedWorkspaceActor,
   documents: DocumentAttachment[] | undefined
 ): Promise<CloudDocumentMeta[]> {
   if (!Array.isArray(documents) || documents.length === 0) return [];
 
   const limited = documents.slice(0, MAX_DOCUMENTS);
   const metaList: CloudDocumentMeta[] = [];
-  const sharedEmails = sanitizeEmailList(target.sharedEmails);
 
   for (const attachment of limited) {
     const attId = sanitizeId(attachment.id, 'doc');
@@ -421,8 +321,8 @@ async function prepareDocumentsForCloud(
       chunkCount = totalChunks;
 
       const firstChunkId = `${attId}_0`;
-      const firstChunkPath = `users/${target.ownerUid}/attachmentChunks/${firstChunkId}`;
-      const firstChunkRef = doc(db, 'users', target.ownerUid, 'attachmentChunks', firstChunkId);
+      const firstChunkPath = `workspaces/${actor.workspaceId}/attachmentChunks/${firstChunkId}`;
+      const firstChunkRef = doc(db, 'workspaces', actor.workspaceId, 'attachmentChunks', firstChunkId);
 
       let alreadyUploaded = false;
       try {
@@ -437,16 +337,17 @@ async function prepareDocumentsForCloud(
           const slice = rawDataUrl.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
           if (!slice) continue;
           const chunkId = `${attId}_${i}`;
-          const chunkPath = `users/${target.ownerUid}/attachmentChunks/${chunkId}`;
-          const chunkRef = doc(db, 'users', target.ownerUid, 'attachmentChunks', chunkId);
+          const chunkPath = `workspaces/${actor.workspaceId}/attachmentChunks/${chunkId}`;
+          const chunkRef = doc(db, 'workspaces', actor.workspaceId, 'attachmentChunks', chunkId);
           try {
             await setDoc(chunkRef, {
-              ownerId: target.ownerUid,
+              workspaceId: actor.workspaceId,
+              visibility: SHARED_VISIBILITY,
+              ownerId: actor.viewerUid,
               attachmentId: attId,
               chunkIndex: i,
               totalChunks,
               data: slice,
-              sharedEmails,
               createdAt: serverTimestamp(),
               updatedAt: serverTimestamp()
             });
@@ -470,8 +371,8 @@ async function prepareDocumentsForCloud(
   return metaList;
 }
 
-export async function fetchAttachmentDataUrl(
-  target: WorkspaceTarget,
+export async function fetchSharedAttachmentDataUrl(
+  actor: SharedWorkspaceActor,
   attachment: DocumentAttachment
 ): Promise<string> {
   if (attachment.dataUrl && attachment.dataUrl.length > 0) {
@@ -488,9 +389,9 @@ export async function fetchAttachmentDataUrl(
     const parts: string[] = [];
     for (let i = 0; i < expectedCount; i++) {
       const chunkId = `${attId}_${i}`;
-      const chunkPath = `users/${target.ownerUid}/attachmentChunks/${chunkId}`;
+      const chunkPath = `workspaces/${actor.workspaceId}/attachmentChunks/${chunkId}`;
       try {
-        const snap = await getDoc(doc(db, 'users', target.ownerUid, 'attachmentChunks', chunkId));
+        const snap = await getDoc(doc(db, 'workspaces', actor.workspaceId, 'attachmentChunks', chunkId));
         if (snap.exists()) {
           const data = snap.data();
           if (typeof data.data === 'string') {
@@ -504,21 +405,19 @@ export async function fetchAttachmentDataUrl(
     const fullUrl = parts.join('');
     if (fullUrl) {
       await saveCachedAttachmentDataUrl(attId, fullUrl);
+      return fullUrl;
     }
-    return fullUrl;
   }
 
-  const colPath = `users/${target.ownerUid}/attachmentChunks`;
+  const colPath = `workspaces/${actor.workspaceId}/attachmentChunks`;
   try {
-    const baseCol = collection(db, 'users', target.ownerUid, 'attachmentChunks');
-    const q =
-      target.ownerUid === target.viewerUid
-        ? query(baseCol, where('ownerId', '==', target.ownerUid), where('attachmentId', '==', attId))
-        : query(
-            baseCol,
-            where('sharedEmails', 'array-contains', target.viewerEmail.trim().toLowerCase()),
-            where('attachmentId', '==', attId)
-          );
+    const baseCol = collection(db, 'workspaces', actor.workspaceId, 'attachmentChunks');
+    const q = query(
+      baseCol,
+      where('workspaceId', '==', actor.workspaceId),
+      where('visibility', '==', SHARED_VISIBILITY),
+      where('attachmentId', '==', attId)
+    );
     const snaps = await getDocs(q);
     const chunks = snaps.docs
       .map((d) => d.data() as { chunkIndex: number; data: string })
@@ -533,8 +432,8 @@ export async function fetchAttachmentDataUrl(
   }
 }
 
-export async function deleteAttachmentChunks(
-  ownerUid: string,
+async function deleteSharedAttachmentChunks(
+  workspaceId: string,
   documents: DocumentAttachment[] | undefined
 ): Promise<void> {
   if (!Array.isArray(documents) || documents.length === 0) return;
@@ -545,7 +444,7 @@ export async function deleteAttachmentChunks(
     for (let i = 0; i < count; i++) {
       const chunkId = `${attId}_${i}`;
       try {
-        await deleteDoc(doc(db, 'users', ownerUid, 'attachmentChunks', chunkId));
+        await deleteDoc(doc(db, 'workspaces', workspaceId, 'attachmentChunks', chunkId));
       } catch {
         // Ignore if chunk already removed
       }
@@ -648,20 +547,16 @@ export interface FirestoreSyncCallbacks {
   onError: (err: Error) => void;
 }
 
-export function subscribeUserCollections(
-  target: WorkspaceTarget,
+export function subscribeSharedCollections(
+  workspaceId: string,
   callbacks: FirestoreSyncCallbacks
 ): () => void {
-  const agendasPath = `users/${target.ownerUid}/agendas`;
-  const journalsPath = `users/${target.ownerUid}/journals`;
-  const dutiesPath = `users/${target.ownerUid}/holidayDuties`;
-
-  const agendasQuery = buildCollectionQuery(target, 'agendas');
-  const journalsQuery = buildCollectionQuery(target, 'journals');
-  const dutiesQuery = buildCollectionQuery(target, 'holidayDuties');
+  const agendasPath = `workspaces/${workspaceId}/agendas`;
+  const journalsPath = `workspaces/${workspaceId}/journals`;
+  const dutiesPath = `workspaces/${workspaceId}/holidayDuties`;
 
   const unsubAgendas = onSnapshot(
-    agendasQuery,
+    buildSharedCollectionQuery(workspaceId, 'agendas'),
     (snapshot) => {
       const items = snapshot.docs.map((d) => docToAgenda(d.data() as Record<string, unknown>, d.id));
       items.sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`));
@@ -677,7 +572,7 @@ export function subscribeUserCollections(
   );
 
   const unsubJournals = onSnapshot(
-    journalsQuery,
+    buildSharedCollectionQuery(workspaceId, 'journals'),
     (snapshot) => {
       const items = snapshot.docs.map((d) => docToJournal(d.data() as Record<string, unknown>, d.id));
       items.sort((a, b) => `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`));
@@ -693,7 +588,7 @@ export function subscribeUserCollections(
   );
 
   const unsubDuties = onSnapshot(
-    dutiesQuery,
+    buildSharedCollectionQuery(workspaceId, 'holidayDuties'),
     (snapshot) => {
       const items = snapshot.docs.map((d) => docToHolidayDuty(d.data() as Record<string, unknown>, d.id));
       items.sort((a, b) => a.date.localeCompare(b.date));
@@ -715,21 +610,21 @@ export function subscribeUserCollections(
   };
 }
 
-export async function fetchAllUserCollectionsFromServer(target: WorkspaceTarget): Promise<{
+export async function fetchAllSharedCollectionsFromServer(workspaceId: string): Promise<{
   agendas: AgendaItem[];
   journals: DailyJournalEntry[];
   holidayDuties: HolidayDutyEntry[];
 }> {
-  const agendasPath = `users/${target.ownerUid}/agendas`;
-  const journalsPath = `users/${target.ownerUid}/journals`;
-  const dutiesPath = `users/${target.ownerUid}/holidayDuties`;
+  const agendasPath = `workspaces/${workspaceId}/agendas`;
+  const journalsPath = `workspaces/${workspaceId}/journals`;
+  const dutiesPath = `workspaces/${workspaceId}/holidayDuties`;
 
   let agendas: AgendaItem[] = [];
   let journals: DailyJournalEntry[] = [];
   let holidayDuties: HolidayDutyEntry[] = [];
 
   try {
-    const snap = await getDocsFromServer(buildCollectionQuery(target, 'agendas'));
+    const snap = await getDocsFromServer(buildSharedCollectionQuery(workspaceId, 'agendas'));
     agendas = snap.docs
       .map((d) => docToAgenda(d.data() as Record<string, unknown>, d.id))
       .sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`));
@@ -738,7 +633,7 @@ export async function fetchAllUserCollectionsFromServer(target: WorkspaceTarget)
   }
 
   try {
-    const snap = await getDocsFromServer(buildCollectionQuery(target, 'journals'));
+    const snap = await getDocsFromServer(buildSharedCollectionQuery(workspaceId, 'journals'));
     journals = snap.docs
       .map((d) => docToJournal(d.data() as Record<string, unknown>, d.id))
       .sort((a, b) => `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`));
@@ -747,7 +642,7 @@ export async function fetchAllUserCollectionsFromServer(target: WorkspaceTarget)
   }
 
   try {
-    const snap = await getDocsFromServer(buildCollectionQuery(target, 'holidayDuties'));
+    const snap = await getDocsFromServer(buildSharedCollectionQuery(workspaceId, 'holidayDuties'));
     holidayDuties = snap.docs
       .map((d) => docToHolidayDuty(d.data() as Record<string, unknown>, d.id))
       .sort((a, b) => a.date.localeCompare(b.date));
@@ -758,20 +653,18 @@ export async function fetchAllUserCollectionsFromServer(target: WorkspaceTarget)
   return { agendas, journals, holidayDuties };
 }
 
-// ==================== CRUD OPERATIONS ====================
+// ==================== CRUD OPERATIONS ON SHARED WORKSPACE ====================
 
-export async function saveAgendaToFirestore(
-  target: WorkspaceTarget,
+export async function saveAgendaToSharedWorkspace(
+  actor: SharedWorkspaceActor,
   agenda: AgendaItem,
   options?: { skipExisting?: boolean }
 ): Promise<void> {
   const safeId = sanitizeId(agenda.id, 'ag');
-  const path = `users/${target.ownerUid}/agendas/${safeId}`;
-  const agendaRef = doc(db, 'users', target.ownerUid, 'agendas', safeId);
+  const path = `workspaces/${actor.workspaceId}/agendas/${safeId}`;
+  const agendaRef = doc(db, 'workspaces', actor.workspaceId, 'agendas', safeId);
 
-  const cloudDocs = await prepareDocumentsForCloud(target, agenda.documents);
-  const sharedEmails = sanitizeEmailList(target.sharedEmails);
-  const isOwner = target.ownerUid === target.viewerUid;
+  const cloudDocs = await prepareDocumentsForSharedCloud(actor, agenda.documents);
 
   const baseEditablePayload = {
     title: clampString(agenda.title, 300, 'Agenda Pimpinan'),
@@ -790,6 +683,7 @@ export async function saveAgendaToFirestore(
     notes: clampString(agenda.notes, 3000, ''),
     documents: cloudDocs,
     reminder: sanitizeReminder(agenda.reminder),
+    updatedBy: actor.viewerUid,
     updatedAt: serverTimestamp()
   };
 
@@ -797,16 +691,14 @@ export async function saveAgendaToFirestore(
     const existing = await getDoc(agendaRef);
     if (existing.exists()) {
       if (options?.skipExisting) return;
-      const updatePayload = isOwner
-        ? { ...baseEditablePayload, sharedEmails }
-        : baseEditablePayload;
-      await updateDoc(agendaRef, updatePayload);
+      await updateDoc(agendaRef, baseEditablePayload);
     } else {
       await setDoc(agendaRef, {
         id: safeId,
-        ownerId: target.ownerUid,
+        workspaceId: actor.workspaceId,
+        visibility: SHARED_VISIBILITY,
+        ownerId: actor.viewerUid,
         ...baseEditablePayload,
-        sharedEmails,
         createdAt: serverTimestamp()
       });
     }
@@ -815,18 +707,19 @@ export async function saveAgendaToFirestore(
   }
 }
 
-export async function updateAgendaStatusInFirestore(
-  ownerUid: string,
+export async function updateAgendaStatusInSharedWorkspace(
+  actor: SharedWorkspaceActor,
   agendaId: string,
   status: AgendaStatus
 ): Promise<void> {
   const safeId = sanitizeId(agendaId, 'ag');
-  const path = `users/${ownerUid}/agendas/${safeId}`;
-  const agendaRef = doc(db, 'users', ownerUid, 'agendas', safeId);
+  const path = `workspaces/${actor.workspaceId}/agendas/${safeId}`;
+  const agendaRef = doc(db, 'workspaces', actor.workspaceId, 'agendas', safeId);
 
   try {
     await updateDoc(agendaRef, {
       status: VALID_STATUSES.includes(status) ? status : 'Terjadwal',
+      updatedBy: actor.viewerUid,
       updatedAt: serverTimestamp()
     });
   } catch (error) {
@@ -834,18 +727,19 @@ export async function updateAgendaStatusInFirestore(
   }
 }
 
-export async function updateAgendaReminderInFirestore(
-  ownerUid: string,
+export async function updateAgendaReminderInSharedWorkspace(
+  actor: SharedWorkspaceActor,
   agendaId: string,
   reminder: ReminderConfig
 ): Promise<void> {
   const safeId = sanitizeId(agendaId, 'ag');
-  const path = `users/${ownerUid}/agendas/${safeId}`;
-  const agendaRef = doc(db, 'users', ownerUid, 'agendas', safeId);
+  const path = `workspaces/${actor.workspaceId}/agendas/${safeId}`;
+  const agendaRef = doc(db, 'workspaces', actor.workspaceId, 'agendas', safeId);
 
   try {
     await updateDoc(agendaRef, {
       reminder: sanitizeReminder(reminder),
+      updatedBy: actor.viewerUid,
       updatedAt: serverTimestamp()
     });
   } catch (error) {
@@ -853,33 +747,31 @@ export async function updateAgendaReminderInFirestore(
   }
 }
 
-export async function deleteAgendaFromFirestore(
-  ownerUid: string,
+export async function deleteAgendaFromSharedWorkspace(
+  workspaceId: string,
   agendaId: string,
   documents?: DocumentAttachment[]
 ): Promise<void> {
   const safeId = sanitizeId(agendaId, 'ag');
-  const path = `users/${ownerUid}/agendas/${safeId}`;
+  const path = `workspaces/${workspaceId}/agendas/${safeId}`;
   try {
-    await deleteDoc(doc(db, 'users', ownerUid, 'agendas', safeId));
+    await deleteDoc(doc(db, 'workspaces', workspaceId, 'agendas', safeId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
-  await deleteAttachmentChunks(ownerUid, documents);
+  await deleteSharedAttachmentChunks(workspaceId, documents);
 }
 
-export async function saveJournalToFirestore(
-  target: WorkspaceTarget,
+export async function saveJournalToSharedWorkspace(
+  actor: SharedWorkspaceActor,
   journal: DailyJournalEntry,
   options?: { skipExisting?: boolean }
 ): Promise<void> {
   const safeId = sanitizeId(journal.id, 'jrn');
-  const path = `users/${target.ownerUid}/journals/${safeId}`;
-  const journalRef = doc(db, 'users', target.ownerUid, 'journals', safeId);
+  const path = `workspaces/${actor.workspaceId}/journals/${safeId}`;
+  const journalRef = doc(db, 'workspaces', actor.workspaceId, 'journals', safeId);
 
-  const cloudDocs = await prepareDocumentsForCloud(target, journal.documents);
-  const sharedEmails = sanitizeEmailList(target.sharedEmails);
-  const isOwner = target.ownerUid === target.viewerUid;
+  const cloudDocs = await prepareDocumentsForSharedCloud(actor, journal.documents);
 
   const baseEditablePayload = {
     date: sanitizeDate(journal.date),
@@ -895,6 +787,7 @@ export async function saveJournalToFirestore(
     followUp: clampString(journal.followUp, 3000, ''),
     outcome: VALID_OUTCOMES.includes(journal.outcome) ? journal.outcome : 'Lancar & Kondusif',
     documents: cloudDocs,
+    updatedBy: actor.viewerUid,
     updatedAt: serverTimestamp()
   };
 
@@ -902,16 +795,14 @@ export async function saveJournalToFirestore(
     const existing = await getDoc(journalRef);
     if (existing.exists()) {
       if (options?.skipExisting) return;
-      const updatePayload = isOwner
-        ? { ...baseEditablePayload, sharedEmails }
-        : baseEditablePayload;
-      await updateDoc(journalRef, updatePayload);
+      await updateDoc(journalRef, baseEditablePayload);
     } else {
       await setDoc(journalRef, {
         id: safeId,
-        ownerId: target.ownerUid,
+        workspaceId: actor.workspaceId,
+        visibility: SHARED_VISIBILITY,
+        ownerId: actor.viewerUid,
         ...baseEditablePayload,
-        sharedEmails,
         createdAt: serverTimestamp()
       });
     }
@@ -920,34 +811,32 @@ export async function saveJournalToFirestore(
   }
 }
 
-export async function deleteJournalFromFirestore(
-  ownerUid: string,
+export async function deleteJournalFromSharedWorkspace(
+  workspaceId: string,
   journalId: string,
   documents?: DocumentAttachment[]
 ): Promise<void> {
   const safeId = sanitizeId(journalId, 'jrn');
-  const path = `users/${ownerUid}/journals/${safeId}`;
+  const path = `workspaces/${workspaceId}/journals/${safeId}`;
   try {
-    await deleteDoc(doc(db, 'users', ownerUid, 'journals', safeId));
+    await deleteDoc(doc(db, 'workspaces', workspaceId, 'journals', safeId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
-  await deleteAttachmentChunks(ownerUid, documents);
+  await deleteSharedAttachmentChunks(workspaceId, documents);
 }
 
-export async function saveHolidayDutyToFirestore(
-  target: WorkspaceTarget,
+export async function saveHolidayDutyToSharedWorkspace(
+  actor: SharedWorkspaceActor,
   duty: HolidayDutyEntry,
   options?: { skipExisting?: boolean }
 ): Promise<void> {
   const safeId = sanitizeId(duty.id, 'piket');
-  const path = `users/${target.ownerUid}/holidayDuties/${safeId}`;
-  const dutyRef = doc(db, 'users', target.ownerUid, 'holidayDuties', safeId);
+  const path = `workspaces/${actor.workspaceId}/holidayDuties/${safeId}`;
+  const dutyRef = doc(db, 'workspaces', actor.workspaceId, 'holidayDuties', safeId);
 
   const coordinatorName = clampString(duty.coordinatorName, 150, 'Koordinator Piket');
   const coordinatorPhone = clampString(duty.coordinatorPhone, 40, '');
-  const sharedEmails = sanitizeEmailList(target.sharedEmails);
-  const isOwner = target.ownerUid === target.viewerUid;
 
   const baseEditablePayload = {
     date: sanitizeDate(duty.date),
@@ -959,6 +848,7 @@ export async function saveHolidayDutyToFirestore(
     officers: sanitizeOfficers(duty.officers, coordinatorName, coordinatorPhone),
     standbyLocation: clampString(duty.standbyLocation, 250, 'Ruang Subag TU Pimpinan & Protokol'),
     notes: clampString(duty.notes, 2000, ''),
+    updatedBy: actor.viewerUid,
     updatedAt: serverTimestamp()
   };
 
@@ -966,16 +856,14 @@ export async function saveHolidayDutyToFirestore(
     const existing = await getDoc(dutyRef);
     if (existing.exists()) {
       if (options?.skipExisting) return;
-      const updatePayload = isOwner
-        ? { ...baseEditablePayload, sharedEmails }
-        : baseEditablePayload;
-      await updateDoc(dutyRef, updatePayload);
+      await updateDoc(dutyRef, baseEditablePayload);
     } else {
       await setDoc(dutyRef, {
         id: safeId,
-        ownerId: target.ownerUid,
+        workspaceId: actor.workspaceId,
+        visibility: SHARED_VISIBILITY,
+        ownerId: actor.viewerUid,
         ...baseEditablePayload,
-        sharedEmails,
         createdAt: serverTimestamp()
       });
     }
@@ -984,27 +872,27 @@ export async function saveHolidayDutyToFirestore(
   }
 }
 
-export async function batchAddHolidayDutiesToFirestore(
-  target: WorkspaceTarget,
+export async function batchAddHolidayDutiesToSharedWorkspace(
+  actor: SharedWorkspaceActor,
   duties: HolidayDutyEntry[]
 ): Promise<void> {
   for (const duty of duties) {
-    await saveHolidayDutyToFirestore(target, duty);
+    await saveHolidayDutyToSharedWorkspace(actor, duty);
   }
 }
 
-export async function deleteHolidayDutyFromFirestore(ownerUid: string, dutyId: string): Promise<void> {
+export async function deleteHolidayDutyFromSharedWorkspace(workspaceId: string, dutyId: string): Promise<void> {
   const safeId = sanitizeId(dutyId, 'piket');
-  const path = `users/${ownerUid}/holidayDuties/${safeId}`;
+  const path = `workspaces/${workspaceId}/holidayDuties/${safeId}`;
   try {
-    await deleteDoc(doc(db, 'users', ownerUid, 'holidayDuties', safeId));
+    await deleteDoc(doc(db, 'workspaces', workspaceId, 'holidayDuties', safeId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
-export async function uploadDatasetToFirestore(
-  target: WorkspaceTarget,
+export async function uploadDatasetToSharedWorkspace(
+  actor: SharedWorkspaceActor,
   data: {
     agendas: AgendaItem[];
     journals: DailyJournalEntry[];
@@ -1014,7 +902,7 @@ export async function uploadDatasetToFirestore(
 ): Promise<void> {
   for (const agenda of data.agendas) {
     try {
-      await saveAgendaToFirestore(target, agenda, options);
+      await saveAgendaToSharedWorkspace(actor, agenda, options);
     } catch (err) {
       if (!options?.skipExisting && !options?.bestEffort) throw err;
       console.warn('Melewati unggah agenda lokal bermasalah:', agenda.id, err);
@@ -1022,7 +910,7 @@ export async function uploadDatasetToFirestore(
   }
   for (const journal of data.journals) {
     try {
-      await saveJournalToFirestore(target, journal, options);
+      await saveJournalToSharedWorkspace(actor, journal, options);
     } catch (err) {
       if (!options?.skipExisting && !options?.bestEffort) throw err;
       console.warn('Melewati unggah jurnal lokal bermasalah:', journal.id, err);
@@ -1030,10 +918,129 @@ export async function uploadDatasetToFirestore(
   }
   for (const duty of data.holidayDuties) {
     try {
-      await saveHolidayDutyToFirestore(target, duty, options);
+      await saveHolidayDutyToSharedWorkspace(actor, duty, options);
     } catch (err) {
       if (!options?.skipExisting && !options?.bestEffort) throw err;
       console.warn('Melewati unggah piket lokal bermasalah:', duty.id, err);
     }
   }
+}
+
+// ==================== SEAMLESS LEGACY MIGRATION (/users/{uid} -> /workspaces/ditjenpas_utama) ====================
+
+async function hydrateLegacyAttachments(
+  userUid: string,
+  documents: DocumentAttachment[]
+): Promise<DocumentAttachment[]> {
+  if (!documents.length) return [];
+  const hydrated: DocumentAttachment[] = [];
+
+  for (const attachment of documents) {
+    if (attachment.dataUrl && attachment.dataUrl.length > 0) {
+      hydrated.push(attachment);
+      continue;
+    }
+    const attId = sanitizeId(attachment.id, 'doc');
+    const cached = await getCachedAttachmentDataUrl(attId);
+    if (cached) {
+      hydrated.push({ ...attachment, dataUrl: cached });
+      continue;
+    }
+
+    const expectedCount = attachment.chunkCount && attachment.chunkCount > 0 ? attachment.chunkCount : 0;
+    let fullUrl = '';
+    if (expectedCount > 0) {
+      const parts: string[] = [];
+      for (let i = 0; i < expectedCount; i++) {
+        try {
+          const snap = await getDoc(doc(db, 'users', userUid, 'attachmentChunks', `${attId}_${i}`));
+          if (snap.exists() && typeof snap.data().data === 'string') {
+            parts.push(snap.data().data as string);
+          }
+        } catch {
+          // ignore missing legacy chunk
+        }
+      }
+      fullUrl = parts.join('');
+    }
+    hydrated.push({ ...attachment, dataUrl: fullUrl });
+  }
+
+  return hydrated;
+}
+
+/**
+ * Automatically migrates any existing records saved in the user's legacy per-account
+ * /users/{uid} subcollections into the shared /workspaces/ditjenpas_utama workspace
+ * without overwriting newer items already present in the shared workspace.
+ */
+export async function migrateLegacyUserWorkspaceToShared(
+  actor: SharedWorkspaceActor,
+  currentSharedLogo: string
+): Promise<{ migratedCount: number; migratedLogo: string | null }> {
+  let migratedCount = 0;
+  let migratedLogo: string | null = null;
+
+  try {
+    const legacyProfileSnap = await getDoc(doc(db, 'users', actor.viewerUid));
+    if (!legacyProfileSnap.exists()) {
+      return { migratedCount: 0, migratedLogo: null };
+    }
+
+    const profileData = legacyProfileSnap.data();
+    if (!currentSharedLogo && typeof profileData.customLogo === 'string' && profileData.customLogo.startsWith('data:image/')) {
+      try {
+        await saveSharedWorkspaceLogo(actor.viewerUid, profileData.customLogo);
+        migratedLogo = profileData.customLogo;
+      } catch {
+        // ignore logo migration failure
+      }
+    }
+
+    const [agendasSnap, journalsSnap, dutiesSnap] = await Promise.all([
+      getDocs(query(collection(db, 'users', actor.viewerUid, 'agendas'), where('ownerId', '==', actor.viewerUid))),
+      getDocs(query(collection(db, 'users', actor.viewerUid, 'journals'), where('ownerId', '==', actor.viewerUid))),
+      getDocs(query(collection(db, 'users', actor.viewerUid, 'holidayDuties'), where('ownerId', '==', actor.viewerUid)))
+    ]);
+
+    for (const d of agendasSnap.docs) {
+      const item = docToAgenda(d.data() as Record<string, unknown>, d.id);
+      if (item.documents.length > 0) {
+        item.documents = await hydrateLegacyAttachments(actor.viewerUid, item.documents);
+      }
+      try {
+        await saveAgendaToSharedWorkspace(actor, item, { skipExisting: true });
+        migratedCount++;
+      } catch {
+        // skip individual item errors
+      }
+    }
+
+    for (const d of journalsSnap.docs) {
+      const item = docToJournal(d.data() as Record<string, unknown>, d.id);
+      if (item.documents.length > 0) {
+        item.documents = await hydrateLegacyAttachments(actor.viewerUid, item.documents);
+      }
+      try {
+        await saveJournalToSharedWorkspace(actor, item, { skipExisting: true });
+        migratedCount++;
+      } catch {
+        // skip individual item errors
+      }
+    }
+
+    for (const d of dutiesSnap.docs) {
+      const item = docToHolidayDuty(d.data() as Record<string, unknown>, d.id);
+      try {
+        await saveHolidayDutyToSharedWorkspace(actor, item, { skipExisting: true });
+        migratedCount++;
+      } catch {
+        // skip individual item errors
+      }
+    }
+  } catch (err) {
+    console.warn('Migrasi otomatis data lama dilewati:', err);
+  }
+
+  return { migratedCount, migratedLogo };
 }

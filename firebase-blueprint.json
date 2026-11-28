@@ -1,8 +1,56 @@
 {
   "entities": {
+    "WorkspaceConfig": {
+      "title": "WorkspaceConfig",
+      "description": "Shared institutional workspace configuration for SUBAG TU PIM & PROTOKOL DITJENPAS (non-PII branding and metadata synced across all computers and phones).",
+      "type": "object",
+      "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "unitName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "customLogo": {
+          "type": "string",
+          "maxLength": 450000,
+          "description": "Synced institutional emblem PNG/JPG data URL shown identically on all computers and phones."
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["shared_unit"]
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["workspaceId", "ownerId", "unitName", "visibility", "updatedBy", "createdAt", "updatedAt"]
+    },
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Verified user root profile document for SUBAG TU PIM & PROTOKOL DITJENPAS workspace.",
+      "description": "Private verified user root profile document.",
       "type": "object",
       "properties": {
         "ownerId": {
@@ -22,7 +70,7 @@
         },
         "sharedEmails": {
           "type": "array",
-          "description": "Bounded list of owner-authorized collaborator email addresses (max 15) for multi-account HP/PC sync."
+          "description": "Bounded list of owner-authorized collaborator email addresses (max 15)."
         },
         "customLogo": {
           "type": "string",
@@ -42,7 +90,7 @@
     },
     "AgendaItem": {
       "title": "AgendaItem",
-      "description": "Monthly leadership agenda entry synchronized across phone and computer.",
+      "description": "Monthly leadership agenda entry synchronized across all computers and phones.",
       "type": "object",
       "properties": {
         "id": {
@@ -51,7 +99,23 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["shared_unit"]
+        },
         "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedBy": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
@@ -133,7 +197,7 @@
         },
         "sharedEmails": {
           "type": "array",
-          "description": "Owner-authorized collaborator emails mirrored for secure list queries (max 15)."
+          "description": "Legacy owner-authorized collaborator emails (max 15)."
         },
         "createdAt": {
           "type": "string",
@@ -165,7 +229,7 @@
     },
     "DailyJournalEntry": {
       "title": "DailyJournalEntry",
-      "description": "Daily protocol activity journal entry.",
+      "description": "Daily protocol activity journal entry synchronized across all computers and phones.",
       "type": "object",
       "properties": {
         "id": {
@@ -174,7 +238,23 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["shared_unit"]
+        },
         "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedBy": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
@@ -243,7 +323,7 @@
         },
         "sharedEmails": {
           "type": "array",
-          "description": "Owner-authorized collaborator emails mirrored for secure list queries (max 15)."
+          "description": "Legacy owner-authorized collaborator emails (max 15)."
         },
         "createdAt": {
           "type": "string",
@@ -273,7 +353,7 @@
     },
     "HolidayDutyEntry": {
       "title": "HolidayDutyEntry",
-      "description": "Holiday protocol duty roster entry.",
+      "description": "Holiday protocol duty roster entry synchronized across all computers and phones.",
       "type": "object",
       "properties": {
         "id": {
@@ -282,7 +362,23 @@
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$"
         },
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["shared_unit"]
+        },
         "ownerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedBy": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128,
@@ -340,7 +436,7 @@
         },
         "sharedEmails": {
           "type": "array",
-          "description": "Owner-authorized collaborator emails mirrored for secure list queries (max 15)."
+          "description": "Legacy owner-authorized collaborator emails (max 15)."
         },
         "createdAt": {
           "type": "string",
@@ -370,6 +466,16 @@
       "description": "Chunked PDF/image attachment payload segment (max 600KB per chunk to stay safely under Firestore 1MB limit).",
       "type": "object",
       "properties": {
+        "workspaceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["shared_unit"]
+        },
         "ownerId": {
           "type": "string",
           "minLength": 1,
@@ -395,7 +501,7 @@
         },
         "sharedEmails": {
           "type": "array",
-          "description": "Owner-authorized collaborator emails mirrored for secure list queries (max 15)."
+          "description": "Legacy owner-authorized collaborator emails (max 15)."
         },
         "createdAt": {
           "type": "string",
@@ -410,25 +516,45 @@
     }
   },
   "firestore": {
+    "/workspaces/{workspaceId}": {
+      "schema": { "$ref": "#/entities/WorkspaceConfig" },
+      "description": "Shared institutional workspace root document holding synced emblem logo and unit metadata."
+    },
+    "/workspaces/{workspaceId}/agendas/{agendaId}": {
+      "schema": { "$ref": "#/entities/AgendaItem" },
+      "description": "Shared institutional leadership agendas synchronized in real time across all computers and phones."
+    },
+    "/workspaces/{workspaceId}/journals/{journalId}": {
+      "schema": { "$ref": "#/entities/DailyJournalEntry" },
+      "description": "Shared institutional daily activity journals synchronized in real time across all computers and phones."
+    },
+    "/workspaces/{workspaceId}/holidayDuties/{dutyId}": {
+      "schema": { "$ref": "#/entities/HolidayDutyEntry" },
+      "description": "Shared institutional holiday protocol duty schedules synchronized in real time across all computers and phones."
+    },
+    "/workspaces/{workspaceId}/attachmentChunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/AttachmentChunk" },
+      "description": "Shared chunked PDF and image attachment data for agendas and journals."
+    },
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
       "description": "Private root profile for each verified user."
     },
     "/users/{userId}/agendas/{agendaId}": {
       "schema": { "$ref": "#/entities/AgendaItem" },
-      "description": "User-owned leadership agendas synchronized in real time across devices."
+      "description": "Legacy per-user leadership agendas retained for seamless automatic migration."
     },
     "/users/{userId}/journals/{journalId}": {
       "schema": { "$ref": "#/entities/DailyJournalEntry" },
-      "description": "User-owned daily activity journals synchronized in real time across devices."
+      "description": "Legacy per-user daily activity journals retained for seamless automatic migration."
     },
     "/users/{userId}/holidayDuties/{dutyId}": {
       "schema": { "$ref": "#/entities/HolidayDutyEntry" },
-      "description": "User-owned holiday protocol duty schedules synchronized in real time across devices."
+      "description": "Legacy per-user holiday protocol duty schedules retained for seamless automatic migration."
     },
     "/users/{userId}/attachmentChunks/{chunkId}": {
       "schema": { "$ref": "#/entities/AttachmentChunk" },
-      "description": "Chunked PDF and image attachment data for agendas and journals."
+      "description": "Legacy per-user chunked attachment data retained for seamless automatic migration."
     }
   }
 }

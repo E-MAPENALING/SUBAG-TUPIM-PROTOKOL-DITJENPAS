@@ -7,6 +7,7 @@ import {
   DutyShift, HolidayDutyEntry, HolidayType, ProtocolOfficer
 } from '../types/agenda';
 import { formatDateIndo } from '../utils/calendarSync';
+import { getLocalDateIso } from '../utils/firestoreSync';
 
 interface HolidayDutyViewProps {
   duties: HolidayDutyEntry[];
@@ -103,7 +104,7 @@ export const HolidayDutyView: React.FC<HolidayDutyViewProps> = ({
     { id: 'init-1', name: '', role: 'Petugas Protokol', phone: '' }
   ]);
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getLocalDateIso();
 
   const openNewModal = (prefillDate?: string) => {
     const defaultDate =

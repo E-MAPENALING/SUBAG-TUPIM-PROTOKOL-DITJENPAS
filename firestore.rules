@@ -39,6 +39,14 @@ service cloud.firestore {
       );
     }
 
+    function workspaceExists(workspaceId) {
+      return exists(/databases/$(database)/documents/workspaces/$(workspaceId));
+    }
+
+    function isSharedUnitWorkspace(workspaceId) {
+      return workspaceId == 'ditjenpas_utama';
+    }
+
     function userProfileExists(userId) {
       return exists(/databases/$(database)/documents/users/$(userId));
     }
@@ -47,7 +55,7 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(userId)).data.sharedEmails;
     }
 
-    // Pillar 1 Master Gate: Collaborator access is strictly derived from the parent user profile's sharedEmails allowlist
+    // Pillar 1 Master Gate (Legacy per-user shared workspaces)
     function isWorkspaceCollaborator(userId) {
       return isVerifiedUser()
         && request.auth.token.email is string
@@ -61,7 +69,6 @@ service cloud.firestore {
       return isVerifiedOwner(userId) || isWorkspaceCollaborator(userId);
     }
 
-    // Prevents collaborators from tampering with sharedEmails when creating subcollection records
     function collaboratorSharedEmailsMatch(userId, data) {
       return isVerifiedOwner(userId) || (
         'sharedEmails' in data && data.sharedEmails == parentSharedEmails(userId)
@@ -116,7 +123,154 @@ service cloud.firestore {
         && (!('snoozedUntil' in rem) || rem.snoozedUntil == null || rem.snoozedUntil is number);
     }
 
-    // ==================== VALIDATION BLUEPRINTS ====================
+    // ==================== SHARED WORKSPACE VALIDATION BLUEPRINTS ====================
+
+    function isValidWorkspaceConfig(data, workspaceId) {
+      return data.keys().hasAll(['workspaceId', 'ownerId', 'unitName', 'visibility', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['workspaceId', 'ownerId', 'unitName', 'customLogo', 'visibility', 'updatedBy', 'createdAt', 'updatedAt'])
+        && isValidId(data.workspaceId)
+        && data.workspaceId == workspaceId
+        && isValidId(data.ownerId)
+        && data.unitName is string && data.unitName.size() >= 1 && data.unitName.size() <= 200
+        && isValidOptionalString(data, 'customLogo', 450000)
+        && data.visibility == 'shared_unit'
+        && isValidId(data.updatedBy)
+        && data.updatedBy == request.auth.uid
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceAgenda(data, workspaceId, agendaId) {
+      return data.keys().hasAll([
+          'id', 'workspaceId', 'visibility', 'ownerId', 'updatedBy',
+          'title', 'category', 'leader', 'leaderName',
+          'date', 'startTime', 'endTime', 'location', 'priority', 'status',
+          'documents', 'reminder', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'workspaceId', 'visibility', 'ownerId', 'updatedBy',
+          'title', 'category', 'leader', 'leaderName',
+          'companions', 'date', 'startTime', 'endTime', 'location',
+          'virtualMeetingUrl', 'dressCode', 'priority', 'status', 'notes',
+          'documents', 'reminder', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == agendaId
+        && isValidId(data.workspaceId)
+        && data.workspaceId == workspaceId
+        && data.visibility == 'shared_unit'
+        && isValidId(data.ownerId)
+        && isValidId(data.updatedBy)
+        && data.updatedBy == request.auth.uid
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 80
+        && data.leader is string && data.leader.size() >= 1 && data.leader.size() <= 80
+        && data.leaderName is string && data.leaderName.size() >= 1 && data.leaderName.size() <= 150
+        && isValidOptionalString(data, 'companions', 400)
+        && isValidDateStr(data.date)
+        && isValidTimeStr(data.startTime)
+        && isValidTimeStr(data.endTime)
+        && data.location is string && data.location.size() <= 300
+        && isValidOptionalString(data, 'virtualMeetingUrl', 500)
+        && isValidOptionalString(data, 'dressCode', 160)
+        && data.priority in ['VIP', 'Tinggi', 'Sedang', 'Rutin']
+        && data.status in ['Terjadwal', 'Berlangsung', 'Selesai', 'Ditunda', 'Dibatalkan']
+        && isValidOptionalString(data, 'notes', 3000)
+        && isValidDocumentList(data.documents)
+        && isValidReminderMap(data.reminder)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceJournal(data, workspaceId, journalId) {
+      return data.keys().hasAll([
+          'id', 'workspaceId', 'visibility', 'ownerId', 'updatedBy',
+          'date', 'time', 'title', 'leaderName',
+          'location', 'reporterName', 'reporterRole', 'summary',
+          'outcome', 'documents', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'workspaceId', 'visibility', 'ownerId', 'updatedBy',
+          'date', 'time', 'title',
+          'relatedAgendaId', 'relatedAgendaTitle', 'leaderName',
+          'location', 'reporterName', 'reporterRole', 'summary',
+          'followUp', 'outcome', 'documents', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == journalId
+        && isValidId(data.workspaceId)
+        && data.workspaceId == workspaceId
+        && data.visibility == 'shared_unit'
+        && isValidId(data.ownerId)
+        && isValidId(data.updatedBy)
+        && data.updatedBy == request.auth.uid
+        && isValidDateStr(data.date)
+        && isValidTimeStr(data.time)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && isValidOptionalString(data, 'relatedAgendaId', 128)
+        && isValidOptionalString(data, 'relatedAgendaTitle', 300)
+        && data.leaderName is string && data.leaderName.size() >= 1 && data.leaderName.size() <= 150
+        && data.location is string && data.location.size() <= 300
+        && data.reporterName is string && data.reporterName.size() >= 1 && data.reporterName.size() <= 150
+        && data.reporterRole is string && data.reporterRole.size() >= 1 && data.reporterRole.size() <= 120
+        && data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 6000
+        && isValidOptionalString(data, 'followUp', 3000)
+        && data.outcome in ['Lancar & Kondusif', 'Perlu Tindak Lanjut', 'Ada Kendala', 'Selesai Dilaporkan']
+        && isValidDocumentList(data.documents)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceHolidayDuty(data, workspaceId, dutyId) {
+      return data.keys().hasAll([
+          'id', 'workspaceId', 'visibility', 'ownerId', 'updatedBy',
+          'date', 'holidayName', 'dayType', 'shift',
+          'coordinatorName', 'officers', 'standbyLocation', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'workspaceId', 'visibility', 'ownerId', 'updatedBy',
+          'date', 'holidayName', 'dayType', 'shift',
+          'coordinatorName', 'coordinatorPhone', 'officers', 'standbyLocation',
+          'notes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.id == dutyId
+        && isValidId(data.workspaceId)
+        && data.workspaceId == workspaceId
+        && data.visibility == 'shared_unit'
+        && isValidId(data.ownerId)
+        && isValidId(data.updatedBy)
+        && data.updatedBy == request.auth.uid
+        && isValidDateStr(data.date)
+        && data.holidayName is string && data.holidayName.size() >= 1 && data.holidayName.size() <= 200
+        && data.dayType in ['Akhir Pekan (Sabtu/Minggu)', 'Libur Nasional', 'Cuti Bersama', 'Hari Besar Keagamaan']
+        && data.shift in ['Standby Penuh (24 Jam)', 'Shift Pagi (07:30 - 14:00)', 'Shift Siang/Sore (14:00 - 20:00)']
+        && data.coordinatorName is string && data.coordinatorName.size() >= 1 && data.coordinatorName.size() <= 150
+        && isValidOptionalString(data, 'coordinatorPhone', 40)
+        && isValidOfficerList(data.officers)
+        && data.standbyLocation is string && data.standbyLocation.size() >= 1 && data.standbyLocation.size() <= 250
+        && isValidOptionalString(data, 'notes', 2000)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspaceAttachmentChunk(data, workspaceId) {
+      return data.keys().hasAll(['workspaceId', 'visibility', 'ownerId', 'attachmentId', 'chunkIndex', 'totalChunks', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['workspaceId', 'visibility', 'ownerId', 'attachmentId', 'chunkIndex', 'totalChunks', 'data', 'createdAt', 'updatedAt'])
+        && isValidId(data.workspaceId)
+        && data.workspaceId == workspaceId
+        && data.visibility == 'shared_unit'
+        && isValidId(data.ownerId)
+        && data.ownerId == request.auth.uid
+        && isValidId(data.attachmentId)
+        && data.chunkIndex is number && data.chunkIndex >= 0 && data.chunkIndex < 30
+        && data.totalChunks is number && data.totalChunks >= 1 && data.totalChunks <= 30
+        && data.data is string && data.data.size() >= 1 && data.data.size() <= 600000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // ==================== LEGACY USER VALIDATION BLUEPRINTS ====================
 
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll(['ownerId', 'email', 'displayName', 'createdAt', 'updatedAt'])
@@ -245,10 +399,227 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    // ==================== COLLECTION RULES ====================
+    // ==================== SHARED INSTITUTIONAL WORKSPACE RULES ====================
+
+    match /workspaces/{workspaceId} {
+      allow get: if isVerifiedUser()
+        && isValidId(workspaceId)
+        && isSharedUnitWorkspace(workspaceId)
+        && (resource == null || existing().visibility == 'shared_unit');
+      allow list: if false;
+      allow create: if isVerifiedUser()
+        && isValidId(workspaceId)
+        && isSharedUnitWorkspace(workspaceId)
+        && isValidWorkspaceConfig(incoming(), workspaceId)
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(workspaceId)
+        && isSharedUnitWorkspace(workspaceId)
+        && isValidWorkspaceConfig(incoming(), workspaceId)
+        && existing().workspaceId == workspaceId
+        && incoming().workspaceId == existing().workspaceId
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Synced institutional logo update
+          incoming().diff(existing()).affectedKeys().hasOnly(['customLogo', 'updatedBy', 'updatedAt']) ||
+          // Action 2: Unit name & logo update
+          incoming().diff(existing()).affectedKeys().hasOnly(['unitName', 'customLogo', 'updatedBy', 'updatedAt'])
+        );
+      allow delete: if false;
+
+      match /agendas/{agendaId} {
+        allow get: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(agendaId)
+          && isSharedUnitWorkspace(workspaceId)
+          && (resource == null || (existing().workspaceId == workspaceId && existing().visibility == 'shared_unit'))
+          && workspaceExists(workspaceId);
+        // Pillar 8: Strictly evaluates resource.data with zero get()/exists() in list
+        allow list: if isVerifiedUser()
+          && isSharedUnitWorkspace(workspaceId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit';
+        allow create: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(agendaId)
+          && isSharedUnitWorkspace(workspaceId)
+          && isValidWorkspaceAgenda(incoming(), workspaceId, agendaId)
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && workspaceExists(workspaceId);
+        allow update: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(agendaId)
+          && isSharedUnitWorkspace(workspaceId)
+          && isValidWorkspaceAgenda(incoming(), workspaceId, agendaId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit'
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().ownerId == existing().ownerId
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && workspaceExists(workspaceId)
+          && (existing().status != 'Dibatalkan' || isAdmin())
+          && (
+            // Action 1: Quick status update
+            incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedBy', 'updatedAt']) ||
+            // Action 2: Reminder snooze / trigger update
+            incoming().diff(existing()).affectedKeys().hasOnly(['reminder', 'updatedBy', 'updatedAt']) ||
+            // Action 3: Full agenda edit by verified staff
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'category', 'leader', 'leaderName', 'companions',
+              'date', 'startTime', 'endTime', 'location', 'virtualMeetingUrl',
+              'dressCode', 'priority', 'status', 'notes', 'documents', 'reminder',
+              'updatedBy', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(agendaId)
+          && isSharedUnitWorkspace(workspaceId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit'
+          && workspaceExists(workspaceId);
+      }
+
+      match /journals/{journalId} {
+        allow get: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(journalId)
+          && isSharedUnitWorkspace(workspaceId)
+          && (resource == null || (existing().workspaceId == workspaceId && existing().visibility == 'shared_unit'))
+          && workspaceExists(workspaceId);
+        allow list: if isVerifiedUser()
+          && isSharedUnitWorkspace(workspaceId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit';
+        allow create: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(journalId)
+          && isSharedUnitWorkspace(workspaceId)
+          && isValidWorkspaceJournal(incoming(), workspaceId, journalId)
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && workspaceExists(workspaceId);
+        allow update: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(journalId)
+          && isSharedUnitWorkspace(workspaceId)
+          && isValidWorkspaceJournal(incoming(), workspaceId, journalId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit'
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().ownerId == existing().ownerId
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && workspaceExists(workspaceId)
+          && (existing().outcome != 'Selesai Dilaporkan' || isAdmin())
+          && (
+            // Action 1: Outcome status update
+            incoming().diff(existing()).affectedKeys().hasOnly(['outcome', 'updatedBy', 'updatedAt']) ||
+            // Action 2: Full journal edit by verified staff
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'date', 'time', 'title', 'relatedAgendaId', 'relatedAgendaTitle',
+              'leaderName', 'location', 'reporterName', 'reporterRole',
+              'summary', 'followUp', 'outcome', 'documents', 'updatedBy', 'updatedAt'
+            ])
+          );
+        allow delete: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(journalId)
+          && isSharedUnitWorkspace(workspaceId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit'
+          && workspaceExists(workspaceId);
+      }
+
+      match /holidayDuties/{dutyId} {
+        allow get: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(dutyId)
+          && isSharedUnitWorkspace(workspaceId)
+          && (resource == null || (existing().workspaceId == workspaceId && existing().visibility == 'shared_unit'))
+          && workspaceExists(workspaceId);
+        allow list: if isVerifiedUser()
+          && isSharedUnitWorkspace(workspaceId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit';
+        allow create: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(dutyId)
+          && isSharedUnitWorkspace(workspaceId)
+          && isValidWorkspaceHolidayDuty(incoming(), workspaceId, dutyId)
+          && incoming().ownerId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && workspaceExists(workspaceId);
+        allow update: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(dutyId)
+          && isSharedUnitWorkspace(workspaceId)
+          && isValidWorkspaceHolidayDuty(incoming(), workspaceId, dutyId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit'
+          && incoming().workspaceId == existing().workspaceId
+          && incoming().ownerId == existing().ownerId
+          && incoming().id == existing().id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && workspaceExists(workspaceId)
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'date', 'holidayName', 'dayType', 'shift', 'coordinatorName',
+            'coordinatorPhone', 'officers', 'standbyLocation', 'notes', 'updatedBy', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(dutyId)
+          && isSharedUnitWorkspace(workspaceId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit'
+          && workspaceExists(workspaceId);
+      }
+
+      match /attachmentChunks/{chunkId} {
+        allow get: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(chunkId)
+          && isSharedUnitWorkspace(workspaceId)
+          && (resource == null || (existing().workspaceId == workspaceId && existing().visibility == 'shared_unit'))
+          && workspaceExists(workspaceId);
+        allow list: if isVerifiedUser()
+          && isSharedUnitWorkspace(workspaceId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit';
+        allow create: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(chunkId)
+          && isSharedUnitWorkspace(workspaceId)
+          && isValidWorkspaceAttachmentChunk(incoming(), workspaceId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && workspaceExists(workspaceId);
+        allow update: if false;
+        allow delete: if isVerifiedUser()
+          && isValidId(workspaceId)
+          && isValidId(chunkId)
+          && isSharedUnitWorkspace(workspaceId)
+          && existing().workspaceId == workspaceId
+          && existing().visibility == 'shared_unit'
+          && workspaceExists(workspaceId);
+      }
+    }
+
+    // ==================== LEGACY PER-USER COLLECTION RULES ====================
 
     match /users/{userId} {
-      // Owner can read own profile; explicitly allowlisted collaborators can read parent workspace metadata to verify membership & sync logo
       allow get: if isVerifiedUser() && isValidId(userId) && (
         (request.auth.uid == userId && (resource == null || existing().ownerId == request.auth.uid)) ||
         (resource != null && 'sharedEmails' in existing() && existing().sharedEmails is list && request.auth.token.email in existing().sharedEmails)
@@ -267,22 +638,17 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          // Action 1: Profile metadata sync
           incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt']) ||
-          // Action 2: Custom institutional logo update
           incoming().diff(existing()).affectedKeys().hasOnly(['customLogo', 'updatedAt']) ||
-          // Action 3: Authorized collaborator email allowlist update
           incoming().diff(existing()).affectedKeys().hasOnly(['sharedEmails', 'updatedAt'])
         );
       allow delete: if false;
 
-      // Leadership Agendas
       match /agendas/{agendaId} {
         allow get: if isVerifiedUser() && isValidId(userId) && isValidId(agendaId) && (
           (request.auth.uid == userId && (resource == null || existing().ownerId == request.auth.uid)) ||
           (isWorkspaceCollaborator(userId) && (resource == null || existing().ownerId == userId))
         );
-        // Pillar 8: Zero get()/exists() in list; strictly scoped by ownerId or mirrored sharedEmails allowlist
         allow list: if isVerifiedUser() && (
           (request.auth.uid == userId && existing().ownerId == request.auth.uid) ||
           ('sharedEmails' in existing() && existing().sharedEmails is list && request.auth.token.email in existing().sharedEmails)
@@ -309,19 +675,14 @@ service cloud.firestore {
           && isWorkspaceMember(userId)
           && (existing().status != 'Dibatalkan' || isAdmin())
           && (
-            // Action 1: Quick status update
             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
-            // Action 2: Reminder snooze / trigger update
             incoming().diff(existing()).affectedKeys().hasOnly(['reminder', 'updatedAt']) ||
-            // Action 3: Owner collaborator allowlist sync
             (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['sharedEmails', 'updatedAt'])) ||
-            // Action 4: Full agenda edit by workspace member (collaborators cannot mutate sharedEmails)
-            (incoming().diff(existing()).affectedKeys().hasOnly([
+            incoming().diff(existing()).affectedKeys().hasOnly([
               'title', 'category', 'leader', 'leaderName', 'companions',
               'date', 'startTime', 'endTime', 'location', 'virtualMeetingUrl',
               'dressCode', 'priority', 'status', 'notes', 'documents', 'reminder', 'updatedAt'
-            ])) ||
-            // Action 5: Full agenda edit with allowlist sync by owner
+            ]) ||
             (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly([
               'title', 'category', 'leader', 'leaderName', 'companions',
               'date', 'startTime', 'endTime', 'location', 'virtualMeetingUrl',
@@ -337,7 +698,6 @@ service cloud.firestore {
           && isWorkspaceMember(userId);
       }
 
-      // Daily Activity Journals
       match /journals/{journalId} {
         allow get: if isVerifiedUser() && isValidId(userId) && isValidId(journalId) && (
           (request.auth.uid == userId && (resource == null || existing().ownerId == request.auth.uid)) ||
@@ -369,17 +729,13 @@ service cloud.firestore {
           && isWorkspaceMember(userId)
           && (existing().outcome != 'Selesai Dilaporkan' || isAdmin())
           && (
-            // Action 1: Outcome status update
             incoming().diff(existing()).affectedKeys().hasOnly(['outcome', 'updatedAt']) ||
-            // Action 2: Owner collaborator allowlist sync
             (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['sharedEmails', 'updatedAt'])) ||
-            // Action 3: Full journal edit by workspace member (collaborators cannot mutate sharedEmails)
             incoming().diff(existing()).affectedKeys().hasOnly([
               'date', 'time', 'title', 'relatedAgendaId', 'relatedAgendaTitle',
               'leaderName', 'location', 'reporterName', 'reporterRole',
               'summary', 'followUp', 'outcome', 'documents', 'updatedAt'
             ]) ||
-            // Action 4: Full journal edit with allowlist sync by owner
             (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly([
               'date', 'time', 'title', 'relatedAgendaId', 'relatedAgendaTitle',
               'leaderName', 'location', 'reporterName', 'reporterRole',
@@ -394,7 +750,6 @@ service cloud.firestore {
           && isWorkspaceMember(userId);
       }
 
-      // Holiday Protocol Duty Rosters
       match /holidayDuties/{dutyId} {
         allow get: if isVerifiedUser() && isValidId(userId) && isValidId(dutyId) && (
           (request.auth.uid == userId && (resource == null || existing().ownerId == request.auth.uid)) ||
@@ -425,14 +780,11 @@ service cloud.firestore {
           && userProfileExists(userId)
           && isWorkspaceMember(userId)
           && (
-            // Action 1: Owner collaborator allowlist sync
             (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['sharedEmails', 'updatedAt'])) ||
-            // Action 2: Full holiday duty edit by workspace member
             incoming().diff(existing()).affectedKeys().hasOnly([
               'date', 'holidayName', 'dayType', 'shift', 'coordinatorName',
               'coordinatorPhone', 'officers', 'standbyLocation', 'notes', 'updatedAt'
             ]) ||
-            // Action 3: Full holiday duty edit with allowlist sync by owner
             (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly([
               'date', 'holidayName', 'dayType', 'shift', 'coordinatorName',
               'coordinatorPhone', 'officers', 'standbyLocation', 'notes', 'sharedEmails', 'updatedAt'
@@ -446,7 +798,6 @@ service cloud.firestore {
           && isWorkspaceMember(userId);
       }
 
-      // Chunked PDF / Image Attachments
       match /attachmentChunks/{chunkId} {
         allow get: if isVerifiedUser() && isValidId(userId) && isValidId(chunkId) && (
           (request.auth.uid == userId && (resource == null || existing().ownerId == request.auth.uid)) ||

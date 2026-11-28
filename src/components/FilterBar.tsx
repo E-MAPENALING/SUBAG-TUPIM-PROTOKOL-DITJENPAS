@@ -48,12 +48,12 @@ export const FilterBar: React.FC<FilterBarProps> = ({
         </div>
 
         {/* Filter Dropdowns */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
           {/* Category */}
           <select
             value={filter.category}
             onChange={(e) => onFilterChange({ ...filter, category: e.target.value })}
-            className="text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full sm:w-auto text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-2.5 sm:px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">Semua Kategori</option>
             {categories.map((c) => (
@@ -65,7 +65,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           <select
             value={filter.priority}
             onChange={(e) => onFilterChange({ ...filter, priority: e.target.value })}
-            className="text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full sm:w-auto text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-2.5 sm:px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">Semua Prioritas</option>
             <option value="VIP">VIP / Sangat Penting</option>
@@ -78,7 +78,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           <select
             value={filter.status}
             onChange={(e) => onFilterChange({ ...filter, status: e.target.value })}
-            className="text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full sm:w-auto text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-2.5 sm:px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">Semua Status</option>
             <option value="Terjadwal">Terjadwal</option>
@@ -92,7 +92,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           <select
             value={filter.leader}
             onChange={(e) => onFilterChange({ ...filter, leader: e.target.value })}
-            className="text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full sm:w-auto text-xs font-medium bg-slate-50 border border-slate-200 rounded-xl px-2.5 sm:px-3 py-2 text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="">Semua Pimpinan</option>
             {leaders.map((l) => (
@@ -104,7 +104,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
           {isFiltered && (
             <button
               onClick={onReset}
-              className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 rounded-xl border border-red-200 transition"
+              className="col-span-2 sm:col-span-1 flex items-center justify-center gap-1 px-3 py-2 text-xs font-semibold text-red-600 bg-red-50 hover:bg-red-100 rounded-xl border border-red-200 transition"
               title="Reset semua filter"
             >
               <X className="w-3.5 h-3.5" />

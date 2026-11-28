@@ -46,25 +46,25 @@ import {
   signOutUser
 } from './firebase';
 import {
-  WorkspaceTarget,
-  ensureUserProfile,
-  verifyWorkspaceAccess,
-  subscribeWorkspaceProfile,
-  subscribeUserCollections,
-  fetchAllUserCollectionsFromServer,
-  saveAgendaToFirestore,
-  updateAgendaStatusInFirestore,
-  updateAgendaReminderInFirestore,
-  deleteAgendaFromFirestore,
-  saveJournalToFirestore,
-  deleteJournalFromFirestore,
-  saveHolidayDutyToFirestore,
-  batchAddHolidayDutiesToFirestore,
-  deleteHolidayDutyFromFirestore,
-  uploadDatasetToFirestore,
-  fetchAttachmentDataUrl,
-  saveWorkspaceCustomLogo,
-  updateWorkspaceSharedEmails
+  SHARED_WORKSPACE_ID,
+  SharedWorkspaceActor,
+  ensureSharedWorkspace,
+  subscribeSharedWorkspace,
+  saveSharedWorkspaceLogo,
+  subscribeSharedCollections,
+  fetchAllSharedCollectionsFromServer,
+  saveAgendaToSharedWorkspace,
+  updateAgendaStatusInSharedWorkspace,
+  updateAgendaReminderInSharedWorkspace,
+  deleteAgendaFromSharedWorkspace,
+  saveJournalToSharedWorkspace,
+  deleteJournalFromSharedWorkspace,
+  saveHolidayDutyToSharedWorkspace,
+  batchAddHolidayDutiesToSharedWorkspace,
+  deleteHolidayDutyFromSharedWorkspace,
+  uploadDatasetToSharedWorkspace,
+  fetchSharedAttachmentDataUrl,
+  migrateLegacyUserWorkspaceToShared
 } from './utils/firestoreSync';
 import {
   getNotificationPermission,
@@ -105,7 +105,8 @@ const MONTH_NAMES = [
   'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
 ];
 
-const WORKSPACE_STORAGE_KEY = 'subag_tu_pim_linked_workspace_v1';
+const LOCAL_DIRTY_KEY = 'subag_tu_pim_local_dirty_v1';
+const LEGACY_MIGRATED_PREFIX = 'subag_tu_pim_migrated_v2_';
 
 const VIEW_ORDER: ViewMode[] = ['calendar', 'list', 'journal', 'piket', 'dashboard', 'print'];
 
@@ -139,21 +140,6 @@ const INITIAL_AGENDA_IDS = new Set(INITIAL_AGENDAS.map((a) => a.id));
 const INITIAL_JOURNAL_IDS = new Set(INITIAL_JOURNALS.map((j) => j.id));
 const INITIAL_DUTY_IDS = new Set(INITIAL_HOLIDAY_DUTIES.map((d) => d.id));
 
-function readRequestedWorkspaceId(): string | null {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const fromUrl = params.get('workspace')?.trim();
-    if (fromUrl && /^[a-zA-Z0-9_-]{1,128}$/.test(fromUrl)) {
-      localStorage.setItem(WORKSPACE_STORAGE_KEY, fromUrl);
-      return fromUrl;
-    }
-    const stored = localStorage.getItem(WORKSPACE_STORAGE_KEY)?.trim();
-    return stored && /^[a-zA-Z0-9_-]{1,128}$/.test(stored) ? stored : null;
-  } catch {
-    return null;
-  }
-}
-
 const GUEST_MODE_STORAGE_KEY = 'subag_tu_pim_guest_mode_v1';
 
 function readInitialGuestMode(): boolean {
@@ -161,6 +147,30 @@ function readInitialGuestMode(): boolean {
     return sessionStorage.getItem(GUEST_MODE_STORAGE_KEY) === '1';
   } catch {
     return false;
+  }
+}
+
+function markLocalDirty(): void {
+  try {
+    localStorage.setItem(LOCAL_DIRTY_KEY, '1');
+  } catch {
+    // ignore storage quota
+  }
+}
+
+function isLocalDirty(): boolean {
+  try {
+    return localStorage.getItem(LOCAL_DIRTY_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function clearLocalDirty(): void {
+  try {
+    localStorage.removeItem(LOCAL_DIRTY_KEY);
+  } catch {
+    // ignore
   }
 }
 
@@ -173,13 +183,6 @@ export default function App() {
   const [authErrorCode, setAuthErrorCode] = useState<string | null>(null);
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
   const [fatalError, setFatalError] = useState<Error | null>(null);
-
-  // Active cloud workspace (defaults to signed-in user's own UID, or linked owner UID for multi-account HP/PC sync)
-  const [linkedWorkspaceOwnerUid, setLinkedWorkspaceOwnerUid] = useState<string | null>(() =>
-    readRequestedWorkspaceId()
-  );
-  const [activeWorkspaceOwnerEmail, setActiveWorkspaceOwnerEmail] = useState<string | null>(null);
-  const [sharedEmails, setSharedEmails] = useState<string[]>([]);
 
   const [agendas, setAgendas] = useState<AgendaItem[]>([]);
   const [journals, setJournals] = useState<DailyJournalEntry[]>([]);
@@ -233,26 +236,20 @@ export default function App() {
   });
 
   const triggeredReminderIdsRef = useRef<Set<string>>(new Set());
-  const activeTargetRef = useRef<WorkspaceTarget | null>(null);
+  const activeActorRef = useRef<SharedWorkspaceActor | null>(null);
 
-  const activeWorkspaceOwnerUid = useMemo(() => {
-    if (!user) return null;
-    return linkedWorkspaceOwnerUid || user.uid;
-  }, [user, linkedWorkspaceOwnerUid]);
-
-  const workspaceTarget = useMemo<WorkspaceTarget | null>(() => {
-    if (!user || !user.emailVerified || !activeWorkspaceOwnerUid) return null;
+  const workspaceActor = useMemo<SharedWorkspaceActor | null>(() => {
+    if (!user || !user.emailVerified) return null;
     return {
-      ownerUid: activeWorkspaceOwnerUid,
+      workspaceId: SHARED_WORKSPACE_ID,
       viewerUid: user.uid,
-      viewerEmail: (user.email || '').trim().toLowerCase(),
-      sharedEmails
+      viewerEmail: (user.email || '').trim().toLowerCase()
     };
-  }, [user, activeWorkspaceOwnerUid, sharedEmails]);
+  }, [user]);
 
   useEffect(() => {
-    activeTargetRef.current = workspaceTarget;
-  }, [workspaceTarget]);
+    activeActorRef.current = workspaceActor;
+  }, [workspaceActor]);
 
   // Propagate fatal Firestore errors to ErrorBoundary
   if (fatalError) {
@@ -269,25 +266,29 @@ export default function App() {
       saveCustomLogo(newDataUrl);
       setLogoUrl(newDataUrl);
       setIsCustomLogo(true);
-      if (user && user.emailVerified && activeWorkspaceOwnerUid === user.uid) {
-        saveWorkspaceCustomLogo(user.uid, newDataUrl).catch((err) => {
+      if (user && user.emailVerified) {
+        saveSharedWorkspaceLogo(user.uid, newDataUrl).catch((err) => {
           console.warn('Gagal menyinkronkan logo ke cloud:', err);
         });
+      } else {
+        markLocalDirty();
       }
     },
-    [user, activeWorkspaceOwnerUid]
+    [user]
   );
 
   const handleResetLogo = useCallback(() => {
     resetCustomLogo();
     setLogoUrl(DEFAULT_APP_LOGO);
     setIsCustomLogo(false);
-    if (user && user.emailVerified && activeWorkspaceOwnerUid === user.uid) {
-      saveWorkspaceCustomLogo(user.uid, '').catch((err) => {
+    if (user && user.emailVerified) {
+      saveSharedWorkspaceLogo(user.uid, '').catch((err) => {
         console.warn('Gagal mereset logo di cloud:', err);
       });
+    } else {
+      markLocalDirty();
     }
-  }, [user, activeWorkspaceOwnerUid]);
+  }, [user]);
 
   // Listen to Firebase Authentication state (with safety timeout so UI never hangs)
   useEffect(() => {
@@ -365,7 +366,7 @@ export default function App() {
     };
   }, [authReady, user, guestMode]);
 
-  // Attach real-time Firestore sync for active workspace when signed in
+  // Attach real-time Firestore sync to the single shared institutional workspace (/workspaces/ditjenpas_utama)
   useEffect(() => {
     if (!authReady || !user) return;
 
@@ -378,13 +379,13 @@ export default function App() {
 
     let active = true;
     let unsubscribeCollections: (() => void) | null = null;
-    let unsubscribeProfile: (() => void) | null = null;
+    let unsubscribeWorkspace: (() => void) | null = null;
 
     async function initCloudWorkspace(signedInUser: User) {
       setIsSyncing(true);
       setWorkspaceNotice(null);
 
-      // Hydrate local IndexedDB immediately so user can use the app while cloud sync connects
+      // Hydrate local IndexedDB immediately so UI opens fast while cloud connects
       let localAgendas: AgendaItem[] = [];
       let localJournals: DailyJournalEntry[] = [];
       let localDuties: HolidayDutyEntry[] = [];
@@ -404,137 +405,101 @@ export default function App() {
         // ignore IndexedDB read errors
       }
 
+      const actor: SharedWorkspaceActor = {
+        workspaceId: SHARED_WORKSPACE_ID,
+        viewerUid: signedInUser.uid,
+        viewerEmail: (signedInUser.email || '').trim().toLowerCase()
+      };
+      activeActorRef.current = actor;
+
       try {
-        // Always ensure own user profile exists first
-        const { isNewProfile, profile: ownProfile } = await ensureUserProfile(signedInUser);
+        // 1. Ensure shared institutional workspace exists
+        const { isNewWorkspace, config } = await ensureSharedWorkspace(signedInUser);
         if (!active) return;
 
-        let resolvedOwnerUid = signedInUser.uid;
-        let resolvedSharedEmails = ownProfile.sharedEmails;
-        let resolvedOwnerEmail = ownProfile.email;
-        let resolvedCustomLogo = ownProfile.customLogo;
-
-        // If device is linked to another owner's workspace (e.g., HP with different Gmail), verify access
-        if (linkedWorkspaceOwnerUid && linkedWorkspaceOwnerUid !== signedInUser.uid) {
-          const check = await verifyWorkspaceAccess(
-            linkedWorkspaceOwnerUid,
-            signedInUser.uid,
-            signedInUser.email || ''
-          );
-          if (!active) return;
-          if (check.ok && check.profile) {
-            resolvedOwnerUid = check.profile.ownerId;
-            resolvedSharedEmails = check.profile.sharedEmails;
-            resolvedOwnerEmail = check.profile.email;
-            resolvedCustomLogo = check.profile.customLogo;
-          } else {
-            setWorkspaceNotice(check.reason || 'Akses ruang kerja bersama ditolak.');
-            try {
-              localStorage.removeItem(WORKSPACE_STORAGE_KEY);
-            } catch {
-              // ignore
-            }
-            setLinkedWorkspaceOwnerUid(null);
-          }
-        }
-
-        setActiveWorkspaceOwnerEmail(resolvedOwnerEmail);
-        setSharedEmails(resolvedSharedEmails);
-
-        // Apply cloud-synced logo if available
-        if (resolvedCustomLogo && resolvedCustomLogo.startsWith('data:image/')) {
-          saveCustomLogo(resolvedCustomLogo);
-          setLogoUrl(resolvedCustomLogo);
+        let sharedLogo = config.customLogo;
+        if (sharedLogo && sharedLogo.startsWith('data:image/')) {
+          saveCustomLogo(sharedLogo);
+          setLogoUrl(sharedLogo);
           setIsCustomLogo(true);
+        } else if (sharedLogo === '') {
+          resetCustomLogo();
+          setLogoUrl(DEFAULT_APP_LOGO);
+          setIsCustomLogo(false);
         }
 
-        const target: WorkspaceTarget = {
-          ownerUid: resolvedOwnerUid,
-          viewerUid: signedInUser.uid,
-          viewerEmail: (signedInUser.email || '').trim().toLowerCase(),
-          sharedEmails: resolvedSharedEmails
-        };
-        activeTargetRef.current = target;
+        // 2. Automatically migrate any legacy per-user (/users/{uid}) records + logo once per account
+        const migrationFlagKey = `${LEGACY_MIGRATED_PREFIX}${signedInUser.uid}`;
+        const alreadyMigrated = (() => {
+          try {
+            return localStorage.getItem(migrationFlagKey) === '1';
+          } catch {
+            return false;
+          }
+        })();
 
-        // Preserve unsynced local work on own workspace during first-ever cloud sign-in
-        if (resolvedOwnerUid === signedInUser.uid) {
-          const hasSyncedThisBrowser = (() => {
-            try {
-              return localStorage.getItem('subag_tu_pim_cloud_synced') === '1';
-            } catch {
-              return false;
-            }
-          })();
+        if (!alreadyMigrated) {
+          const { migratedLogo } = await migrateLegacyUserWorkspaceToShared(actor, sharedLogo);
+          if (!active) return;
+          if (migratedLogo && migratedLogo.startsWith('data:image/')) {
+            sharedLogo = migratedLogo;
+            saveCustomLogo(migratedLogo);
+            setLogoUrl(migratedLogo);
+            setIsCustomLogo(true);
+          }
+          try {
+            localStorage.setItem(migrationFlagKey, '1');
+          } catch {
+            // ignore
+          }
+        }
 
-          if (isNewProfile || !hasSyncedThisBrowser) {
-            if (isNewProfile) {
-              if (localAgendas.length > 0 || localJournals.length > 0 || localDuties.length > 0) {
-                await uploadDatasetToFirestore(
-                  target,
-                  {
-                    agendas: localAgendas,
-                    journals: localJournals,
-                    holidayDuties: localDuties
-                  },
-                  { bestEffort: true }
-                );
-              } else {
-                await uploadDatasetToFirestore(
-                  target,
-                  {
-                    agendas: INITIAL_AGENDAS,
-                    journals: INITIAL_JOURNALS,
-                    holidayDuties: INITIAL_HOLIDAY_DUTIES
-                  },
-                  { bestEffort: true }
-                );
-              }
-            } else {
-              // Profile already exists from another device: safely upload ONLY custom local items not yet in cloud
-              const customAgendas = localAgendas.filter((a) => !INITIAL_AGENDA_IDS.has(a.id));
-              const customJournals = localJournals.filter((j) => !INITIAL_JOURNAL_IDS.has(j.id));
-              const customDuties = localDuties.filter((d) => !INITIAL_DUTY_IDS.has(d.id));
-              if (customAgendas.length > 0 || customJournals.length > 0 || customDuties.length > 0) {
-                await uploadDatasetToFirestore(
-                  target,
-                  {
-                    agendas: customAgendas,
-                    journals: customJournals,
-                    holidayDuties: customDuties
-                  },
-                  { skipExisting: true, bestEffort: true }
-                );
-              }
-            }
+        // 3. If user made edits in Local Mode earlier on this device, push them to the shared cloud workspace
+        if (isLocalDirty()) {
+          const customAgendas = localAgendas.filter((a) => !INITIAL_AGENDA_IDS.has(a.id));
+          const customJournals = localJournals.filter((j) => !INITIAL_JOURNAL_IDS.has(j.id));
+          const customDuties = localDuties.filter((d) => !INITIAL_DUTY_IDS.has(d.id));
+          const toPushAgendas = customAgendas.length > 0 ? customAgendas : localAgendas;
+          const toPushJournals = customJournals.length > 0 ? customJournals : localJournals;
+          const toPushDuties = customDuties.length > 0 ? customDuties : localDuties;
 
-            // If user had uploaded a custom logo locally before cloud sync, push it once
-            const localCustomLogo = getStoredCustomLogo();
-            if (localCustomLogo && !resolvedCustomLogo) {
-              await saveWorkspaceCustomLogo(signedInUser.uid, localCustomLogo).catch(() => {});
-            }
+          if (toPushAgendas.length > 0 || toPushJournals.length > 0 || toPushDuties.length > 0) {
+            await uploadDatasetToSharedWorkspace(
+              actor,
+              {
+                agendas: toPushAgendas,
+                journals: toPushJournals,
+                holidayDuties: toPushDuties
+              },
+              { bestEffort: true }
+            );
+          }
+          const localLogo = getStoredCustomLogo();
+          if (localLogo && !sharedLogo) {
+            await saveSharedWorkspaceLogo(signedInUser.uid, localLogo).catch(() => {});
+            sharedLogo = localLogo;
+          }
+          clearLocalDirty();
+        } else {
+          // If this browser previously stored a custom logo locally and cloud has none yet, push it once
+          const localLogo = getStoredCustomLogo();
+          if (localLogo && !sharedLogo) {
+            await saveSharedWorkspaceLogo(signedInUser.uid, localLogo).catch(() => {});
+            sharedLogo = localLogo;
           }
         }
 
         if (!active) return;
 
-        try {
-          localStorage.setItem('subag_tu_pim_cloud_synced', '1');
-        } catch {
-          // ignore storage quota
-        }
-
-        // Subscribe to workspace profile changes (real-time customLogo + sharedEmails sync)
-        unsubscribeProfile = subscribeWorkspaceProfile(
-          resolvedOwnerUid,
-          (updatedProfile) => {
+        // 4. Subscribe to real-time workspace config (logo sync across all PCs & HPs)
+        unsubscribeWorkspace = subscribeSharedWorkspace(
+          (updatedConfig) => {
             if (!active) return;
-            setActiveWorkspaceOwnerEmail(updatedProfile.email);
-            setSharedEmails(updatedProfile.sharedEmails);
-            if (updatedProfile.customLogo && updatedProfile.customLogo.startsWith('data:image/')) {
-              saveCustomLogo(updatedProfile.customLogo);
-              setLogoUrl(updatedProfile.customLogo);
+            if (updatedConfig.customLogo && updatedConfig.customLogo.startsWith('data:image/')) {
+              saveCustomLogo(updatedConfig.customLogo);
+              setLogoUrl(updatedConfig.customLogo);
               setIsCustomLogo(true);
-            } else if (updatedProfile.customLogo === '') {
+            } else if (updatedConfig.customLogo === '') {
               resetCustomLogo();
               setLogoUrl(DEFAULT_APP_LOGO);
               setIsCustomLogo(false);
@@ -542,12 +507,12 @@ export default function App() {
           },
           (err) => {
             if (!active) return;
-            console.warn('Profile sync warning:', err);
+            console.warn('Shared workspace config sync warning:', err);
           }
         );
 
-        // Subscribe to real-time collections (agendas, journals, holidayDuties)
-        unsubscribeCollections = subscribeUserCollections(target, {
+        // 5. Subscribe to real-time shared collections (agendas, journals, holidayDuties)
+        unsubscribeCollections = subscribeSharedCollections(SHARED_WORKSPACE_ID, {
           onAgendas: (cloudAgendas) => {
             if (!active) return;
             setAgendas(cloudAgendas);
@@ -573,10 +538,36 @@ export default function App() {
           }
         });
 
-        // Immediately pull fresh authoritative server data without crashing app if temporarily offline
+        // 6. Pull authoritative server data immediately
         try {
-          const fresh = await fetchAllUserCollectionsFromServer(target);
+          let fresh = await fetchAllSharedCollectionsFromServer(SHARED_WORKSPACE_ID);
           if (!active) return;
+
+          // Seed initial institutional template ONLY if shared workspace is brand-new and completely empty
+          const isCloudEmpty =
+            fresh.agendas.length === 0 &&
+            fresh.journals.length === 0 &&
+            fresh.holidayDuties.length === 0;
+
+          if (isNewWorkspace && isCloudEmpty) {
+            const seedData =
+              localAgendas.length > 0 || localJournals.length > 0 || localDuties.length > 0
+                ? {
+                    agendas: localAgendas,
+                    journals: localJournals,
+                    holidayDuties: localDuties
+                  }
+                : {
+                    agendas: INITIAL_AGENDAS,
+                    journals: INITIAL_JOURNALS,
+                    holidayDuties: INITIAL_HOLIDAY_DUTIES
+                  };
+            await uploadDatasetToSharedWorkspace(actor, seedData, { bestEffort: true });
+            if (!active) return;
+            fresh = await fetchAllSharedCollectionsFromServer(SHARED_WORKSPACE_ID);
+            if (!active) return;
+          }
+
           setAgendas(fresh.agendas);
           setJournals(fresh.journals);
           setHolidayDuties(fresh.holidayDuties);
@@ -623,9 +614,8 @@ export default function App() {
     // Automatically refresh from Firestore server whenever user switches back to HP/PC tab
     const handleResumeSync = () => {
       if (document.visibilityState && document.visibilityState !== 'visible') return;
-      const currentTarget = activeTargetRef.current;
-      if (!currentTarget) return;
-      fetchAllUserCollectionsFromServer(currentTarget)
+      if (!activeActorRef.current) return;
+      fetchAllSharedCollectionsFromServer(SHARED_WORKSPACE_ID)
         .then((fresh) => {
           if (!active) return;
           setAgendas(fresh.agendas);
@@ -645,9 +635,9 @@ export default function App() {
       window.removeEventListener('focus', handleResumeSync);
       document.removeEventListener('visibilitychange', handleResumeSync);
       if (unsubscribeCollections) unsubscribeCollections();
-      if (unsubscribeProfile) unsubscribeProfile();
+      if (unsubscribeWorkspace) unsubscribeWorkspace();
     };
-  }, [authReady, user, linkedWorkspaceOwnerUid]);
+  }, [authReady, user]);
 
   // Background reminder periodic checker (Runs every 10 seconds)
   useEffect(() => {
@@ -681,8 +671,8 @@ export default function App() {
             };
             const updatedAgenda = { ...agenda, reminder: updatedReminder };
             void saveSingleAgendaToDB(updatedAgenda);
-            if (activeWorkspaceOwnerUid) {
-              updateAgendaReminderInFirestore(activeWorkspaceOwnerUid, agenda.id, updatedReminder).catch((err) => {
+            if (workspaceActor) {
+              updateAgendaReminderInSharedWorkspace(workspaceActor, agenda.id, updatedReminder).catch((err) => {
                 console.warn('Gagal memperbarui status pengingat di cloud:', err);
               });
             }
@@ -696,7 +686,7 @@ export default function App() {
     checkReminders();
     const interval = setInterval(checkReminders, 10000);
     return () => clearInterval(interval);
-  }, [agendas, isLoaded, dismissedAlertIds, activeWorkspaceOwnerUid]);
+  }, [agendas, isLoaded, dismissedAlertIds, workspaceActor]);
 
   const isInIframe = useMemo(() => {
     try {
@@ -790,18 +780,18 @@ export default function App() {
     }
   };
 
-  // Resolve attachment Data URL from inline payload, local IndexedDB cache, or Firestore chunks
+  // Resolve attachment Data URL from inline payload, local IndexedDB cache, or shared Firestore chunks
   const resolveAttachmentDataUrl = useCallback(
     async (docItem: DocumentAttachment): Promise<string> => {
       if (docItem.dataUrl && docItem.dataUrl.length > 0) {
         return docItem.dataUrl;
       }
-      if (workspaceTarget) {
-        return await fetchAttachmentDataUrl(workspaceTarget, docItem);
+      if (workspaceActor) {
+        return await fetchSharedAttachmentDataUrl(workspaceActor, docItem);
       }
       return (await getCachedAttachmentDataUrl(docItem.id)) || '';
     },
-    [workspaceTarget]
+    [workspaceActor]
   );
 
   // Lazy-load PDF / Image attachment chunks from Firestore when previewing on another device
@@ -954,7 +944,7 @@ export default function App() {
 
   // Manual Cloud Server Sync refresh (bypasses local cache via getDocsFromServer)
   const handleManualSync = async (): Promise<{ ok: boolean; message: string }> => {
-    if (!workspaceTarget) {
+    if (!workspaceActor) {
       setIsSyncModalOpen(true);
       return {
         ok: false,
@@ -964,7 +954,7 @@ export default function App() {
 
     setIsSyncing(true);
     try {
-      const snapshot = await fetchAllUserCollectionsFromServer(workspaceTarget);
+      const snapshot = await fetchAllSharedCollectionsFromServer(SHARED_WORKSPACE_ID);
       setAgendas(snapshot.agendas);
       setJournals(snapshot.journals);
       setHolidayDuties(snapshot.holidayDuties);
@@ -989,21 +979,22 @@ export default function App() {
     }
   };
 
-  // Explicit push of current device dataset into cloud
+  // Explicit push of current device dataset into shared cloud workspace
   const handleUploadLocalToCloud = async (): Promise<{ ok: boolean; message: string }> => {
-    if (!workspaceTarget) {
+    if (!workspaceActor) {
       return { ok: false, message: 'Silakan masuk dengan akun Google terlebih dahulu.' };
     }
     setIsSyncing(true);
     try {
-      await uploadDatasetToFirestore(workspaceTarget, {
+      await uploadDatasetToSharedWorkspace(workspaceActor, {
         agendas,
         journals,
         holidayDuties
       });
+      clearLocalDirty();
       return {
         ok: true,
-        message: `Seluruh data perangkat ini (${agendas.length} agenda, ${journals.length} jurnal, ${holidayDuties.length} piket) berhasil dikirim ke cloud.`
+        message: `Seluruh data perangkat ini (${agendas.length} agenda, ${journals.length} jurnal, ${holidayDuties.length} piket) berhasil dikirim ke database bersama.`
       };
     } catch (err) {
       setFatalError(err instanceof Error ? err : new Error(String(err)));
@@ -1014,64 +1005,6 @@ export default function App() {
     } finally {
       setIsSyncing(false);
     }
-  };
-
-  // Update owner-authorized collaborator email allowlist
-  const handleUpdateSharedEmails = async (
-    nextEmails: string[]
-  ): Promise<{ ok: boolean; message: string }> => {
-    if (!user || activeWorkspaceOwnerUid !== user.uid) {
-      return { ok: false, message: 'Hanya pemilik ruang kerja yang dapat mengatur daftar email akses.' };
-    }
-    try {
-      const saved = await updateWorkspaceSharedEmails(user.uid, nextEmails);
-      setSharedEmails(saved);
-      return {
-        ok: true,
-        message:
-          saved.length > 0
-            ? `Akses diperbarui (${saved.length} email HP/tim diizinkan). Sekarang salin tautan penghubung dan buka di HP.`
-            : 'Daftar email akses berhasil diperbarui.'
-      };
-    } catch (err) {
-      setFatalError(err instanceof Error ? err : new Error(String(err)));
-      return { ok: false, message: 'Gagal memperbarui daftar email akses.' };
-    }
-  };
-
-  // Join another user's authorized workspace (e.g., HP with personal Gmail joining Komputer's office workspace)
-  const handleJoinWorkspace = async (
-    ownerUid: string
-  ): Promise<{ ok: boolean; message: string }> => {
-    if (!user || !user.emailVerified) {
-      return { ok: false, message: 'Masuk dengan akun Google terlebih dahulu.' };
-    }
-    const result = await verifyWorkspaceAccess(ownerUid, user.uid, user.email || '');
-    if (!result.ok || !result.profile) {
-      return { ok: false, message: result.reason || 'Tidak dapat terhubung ke ruang kerja tersebut.' };
-    }
-    try {
-      localStorage.setItem(WORKSPACE_STORAGE_KEY, result.profile.ownerId);
-    } catch {
-      // ignore
-    }
-    setLinkedWorkspaceOwnerUid(result.profile.ownerId);
-    return {
-      ok: true,
-      message: `Berhasil terhubung ke ruang kerja ${result.profile.email}. Data HP dan Komputer kini 100% sama secara real-time.`
-    };
-  };
-
-  const handleLeaveSharedWorkspace = () => {
-    try {
-      localStorage.removeItem(WORKSPACE_STORAGE_KEY);
-      if (window.location.search.includes('workspace=')) {
-        window.history.replaceState({}, '', window.location.pathname);
-      }
-    } catch {
-      // ignore
-    }
-    setLinkedWorkspaceOwnerUid(null);
   };
 
   // Explicit JSON backup import (works in both Cloud Mode and Local Mode)
@@ -1091,14 +1024,16 @@ export default function App() {
         saveHolidayDutiesToDB(data.holidayDuties)
       ]);
 
-      if (workspaceTarget) {
-        await uploadDatasetToFirestore(workspaceTarget, data, { bestEffort: true });
+      if (workspaceActor) {
+        await uploadDatasetToSharedWorkspace(workspaceActor, data, { bestEffort: true });
+        clearLocalDirty();
         return {
           ok: true,
-          message: `Data berhasil diimpor ke database cloud (${data.agendas.length} agenda, ${data.journals.length} jurnal, ${data.holidayDuties.length} piket) dan otomatis tersinkron ke semua perangkat.`
+          message: `Data berhasil diimpor ke database bersama (${data.agendas.length} agenda, ${data.journals.length} jurnal, ${data.holidayDuties.length} piket) dan otomatis tersinkron ke semua HP & Komputer.`
         };
       }
 
+      markLocalDirty();
       return {
         ok: true,
         message: `Data berhasil diimpor ke perangkat ini (${data.agendas.length} agenda, ${data.journals.length} jurnal, ${data.holidayDuties.length} piket). Masuk Google kapan saja untuk mengunggah ke cloud.`
@@ -1114,7 +1049,7 @@ export default function App() {
     }
   };
 
-  // CRUD Handlers — write directly to active Firestore workspace
+  // CRUD Handlers — write directly to shared institutional Firestore workspace
   const handleSaveAgenda = async (savedItem: AgendaItem) => {
     setAgendas((prev) => {
       const exists = prev.some((a) => a.id === savedItem.id);
@@ -1124,12 +1059,14 @@ export default function App() {
     setIsModalOpen(false);
     setAgendaToEdit(null);
 
-    if (workspaceTarget) {
+    if (workspaceActor) {
       try {
-        await saveAgendaToFirestore(workspaceTarget, savedItem);
+        await saveAgendaToSharedWorkspace(workspaceActor, savedItem);
       } catch (err) {
         setFatalError(err instanceof Error ? err : new Error(String(err)));
       }
+    } else {
+      markLocalDirty();
     }
   };
 
@@ -1137,12 +1074,14 @@ export default function App() {
     const target = agendas.find((a) => a.id === id);
     setAgendas((prev) => prev.filter((a) => a.id !== id));
     await deleteAgendaFromDB(id);
-    if (activeWorkspaceOwnerUid) {
+    if (workspaceActor) {
       try {
-        await deleteAgendaFromFirestore(activeWorkspaceOwnerUid, id, target?.documents);
+        await deleteAgendaFromSharedWorkspace(SHARED_WORKSPACE_ID, id, target?.documents);
       } catch (err) {
         setFatalError(err instanceof Error ? err : new Error(String(err)));
       }
+    } else {
+      markLocalDirty();
     }
   };
 
@@ -1157,12 +1096,14 @@ export default function App() {
     setAgendas((prev) => prev.map((a) => (a.id === id ? updatedItem : a)));
     await saveSingleAgendaToDB(updatedItem);
 
-    if (activeWorkspaceOwnerUid) {
+    if (workspaceActor) {
       try {
-        await updateAgendaStatusInFirestore(activeWorkspaceOwnerUid, id, newStatus);
+        await updateAgendaStatusInSharedWorkspace(workspaceActor, id, newStatus);
       } catch (err) {
         setFatalError(err instanceof Error ? err : new Error(String(err)));
       }
+    } else {
+      markLocalDirty();
     }
   };
 
@@ -1178,10 +1119,12 @@ export default function App() {
     void saveSingleAgendaToDB(updatedItem);
     setActiveAlerts((prev) => prev.filter((item) => item.agenda.id !== agendaId));
 
-    if (activeWorkspaceOwnerUid) {
-      updateAgendaReminderInFirestore(activeWorkspaceOwnerUid, agendaId, updatedReminder).catch((err) => {
+    if (workspaceActor) {
+      updateAgendaReminderInSharedWorkspace(workspaceActor, agendaId, updatedReminder).catch((err) => {
         setFatalError(err instanceof Error ? err : new Error(String(err)));
       });
+    } else {
+      markLocalDirty();
     }
   };
 
@@ -1218,12 +1161,14 @@ export default function App() {
     });
     await saveSingleJournalToDB(entry);
 
-    if (workspaceTarget) {
+    if (workspaceActor) {
       try {
-        await saveJournalToFirestore(workspaceTarget, entry);
+        await saveJournalToSharedWorkspace(workspaceActor, entry);
       } catch (err) {
         setFatalError(err instanceof Error ? err : new Error(String(err)));
       }
+    } else {
+      markLocalDirty();
     }
   };
 
@@ -1231,12 +1176,14 @@ export default function App() {
     const target = journals.find((j) => j.id === id);
     setJournals((prev) => prev.filter((j) => j.id !== id));
     await deleteJournalFromDB(id);
-    if (activeWorkspaceOwnerUid) {
+    if (workspaceActor) {
       try {
-        await deleteJournalFromFirestore(activeWorkspaceOwnerUid, id, target?.documents);
+        await deleteJournalFromSharedWorkspace(SHARED_WORKSPACE_ID, id, target?.documents);
       } catch (err) {
         setFatalError(err instanceof Error ? err : new Error(String(err)));
       }
+    } else {
+      markLocalDirty();
     }
   };
 
@@ -1248,12 +1195,14 @@ export default function App() {
     });
     await saveSingleHolidayDutyToDB(duty);
 
-    if (workspaceTarget) {
+    if (workspaceActor) {
       try {
-        await saveHolidayDutyToFirestore(workspaceTarget, duty);
+        await saveHolidayDutyToSharedWorkspace(workspaceActor, duty);
       } catch (err) {
         setFatalError(err instanceof Error ? err : new Error(String(err)));
       }
+    } else {
+      markLocalDirty();
     }
   };
 
@@ -1262,12 +1211,14 @@ export default function App() {
     setHolidayDuties(updated);
     await saveHolidayDutiesToDB(updated);
 
-    if (workspaceTarget) {
+    if (workspaceActor) {
       try {
-        await batchAddHolidayDutiesToFirestore(workspaceTarget, newDuties);
+        await batchAddHolidayDutiesToSharedWorkspace(workspaceActor, newDuties);
       } catch (err) {
         setFatalError(err instanceof Error ? err : new Error(String(err)));
       }
+    } else {
+      markLocalDirty();
     }
   };
 
@@ -1275,12 +1226,14 @@ export default function App() {
     setHolidayDuties((prev) => prev.filter((d) => d.id !== id));
     await deleteHolidayDutyFromDB(id);
 
-    if (activeWorkspaceOwnerUid) {
+    if (workspaceActor) {
       try {
-        await deleteHolidayDutyFromFirestore(activeWorkspaceOwnerUid, id);
+        await deleteHolidayDutyFromSharedWorkspace(SHARED_WORKSPACE_ID, id);
       } catch (err) {
         setFatalError(err instanceof Error ? err : new Error(String(err)));
       }
+    } else {
+      markLocalDirty();
     }
   };
 
@@ -1323,10 +1276,10 @@ export default function App() {
           <div className="p-6 space-y-4">
             <div className="space-y-2 text-center">
               <h2 className="text-base font-bold text-slate-900">
-                Masuk untuk Sinkronisasi HP &amp; Komputer
+                Database Cloud Bersama HP &amp; Komputer
               </h2>
               <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-                Masuk menggunakan <strong>akun Google yang sama</strong> di HP dan Komputer agar seluruh agenda, jurnal, piket, lampiran, dan logo selalu identik secara real-time.
+                Masuk dengan <strong>akun Google di komputer atau HP mana pun</strong> — seluruh agenda, jurnal, piket, lampiran, dan logo otomatis 100% sama secara real-time.
               </p>
             </div>
 
@@ -1660,7 +1613,7 @@ export default function App() {
         }}
       />
 
-      {/* HP <-> Komputer Cloud Sync & Multi-Account Linking Modal */}
+      {/* HP <-> Komputer Shared Cloud Sync Modal */}
       <SyncDeviceModal
         isOpen={isSyncModalOpen}
         onClose={() => setIsSyncModalOpen(false)}
@@ -1668,20 +1621,13 @@ export default function App() {
         journals={journals}
         holidayDuties={holidayDuties}
         isSyncing={isSyncing}
-        userUid={user?.uid || null}
         userEmail={user?.email || null}
         userDisplayName={user?.displayName || null}
-        activeWorkspaceOwnerUid={activeWorkspaceOwnerUid}
-        activeWorkspaceOwnerEmail={activeWorkspaceOwnerEmail}
-        sharedEmails={sharedEmails}
         isAuthLoading={isAuthLoading}
         onSignInGoogle={handleSignInGoogle}
         onSignOut={handleSignOut}
         onManualSync={handleManualSync}
         onUploadLocalToCloud={handleUploadLocalToCloud}
-        onUpdateSharedEmails={handleUpdateSharedEmails}
-        onJoinWorkspace={handleJoinWorkspace}
-        onLeaveSharedWorkspace={handleLeaveSharedWorkspace}
         onImportBackup={handleImportBackup}
       />
 

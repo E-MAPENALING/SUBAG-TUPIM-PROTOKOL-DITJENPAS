@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { AgendaItem, DocumentAttachment, HolidayDutyEntry } from '../types/agenda';
 import { generateGoogleCalendarUrl, downloadIcsFile, generateWhatsAppShareText, formatDateIndo } from '../utils/calendarSync';
+import { getLocalDateIso } from '../utils/firestoreSync';
 
 interface CalendarMonthViewProps {
   selectedYear: number;
@@ -50,7 +51,7 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
     }
   };
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = getLocalDateIso();
 
   // Calculate days in current month and day of week for 1st day (0 = Sunday in JS, so convert to Mon = 0)
   const firstDayOfMonth = new Date(selectedYear, selectedMonth, 1);
@@ -163,12 +164,12 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
               <div
                 key={`prev-${cell.dateStr}`}
                 onClick={() => setSelectedDayDate(cell.dateStr)}
-                className="bg-slate-50/60 p-1.5 sm:p-2 min-h-[95px] sm:min-h-[120px] opacity-45 cursor-pointer hover:opacity-80 transition flex flex-col"
+                className="bg-slate-50/60 p-1.5 sm:p-2 min-h-[72px] sm:min-h-[120px] opacity-45 cursor-pointer hover:opacity-80 transition flex flex-col"
               >
                 <span className="text-xs font-medium text-slate-400">{cell.day}</span>
                 {dayAgendas.length > 0 && (
                   <span className="text-[10px] text-slate-500 mt-1 font-semibold">
-                    {dayAgendas.length} agenda
+                    {dayAgendas.length}
                   </span>
                 )}
               </div>
@@ -181,17 +182,18 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
             const dayDuty = dutyMap.get(cell.dateStr);
             const isToday = cell.dateStr === todayStr;
             const isSelected = cell.dateStr === activeDate;
+            const hasVip = dayAgendas.some((a) => a.priority === 'VIP');
 
             return (
               <div
                 key={cell.dateStr}
                 onClick={() => setSelectedDayDate(cell.dateStr)}
-                className={`bg-white p-1.5 sm:p-2.5 min-h-[105px] sm:min-h-[135px] cursor-pointer transition flex flex-col relative group ${
-                  isSelected ? 'ring-2 ring-blue-600 ring-inset bg-blue-50/20' : 'hover:bg-slate-50/80'
+                className={`bg-white p-1.5 sm:p-2.5 min-h-[74px] sm:min-h-[135px] cursor-pointer transition flex flex-col relative group ${
+                  isSelected ? 'ring-2 ring-blue-600 ring-inset bg-blue-50/25' : 'hover:bg-slate-50/80'
                 }`}
               >
                 {/* Cell Header: Date Number & Add Button */}
-                <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center justify-between mb-1 sm:mb-1.5">
                   <span
                     className={`inline-flex items-center justify-center text-xs font-bold w-6 h-6 rounded-full transition ${
                       isToday
@@ -204,7 +206,7 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
                     {cell.day}
                   </span>
 
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                  <div className="hidden sm:flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                     <button
                       type="button"
                       onClick={(e) => {
@@ -219,8 +221,30 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
                   </div>
                 </div>
 
-                {/* Event Chips List */}
-                <div className="flex-1 space-y-1 overflow-hidden">
+                {/* Mobile Clean Compact Indicators (< sm) */}
+                <div className="sm:hidden flex-1 flex flex-col justify-between gap-1 pt-0.5">
+                  {dayAgendas.length > 0 && (
+                    <div className="space-y-0.5">
+                      <span
+                        className={`inline-flex items-center justify-center w-full px-1 py-0.5 rounded text-[9px] font-bold truncate ${
+                          hasVip
+                            ? 'bg-red-100 text-red-800 border border-red-200'
+                            : 'bg-blue-100 text-blue-800 border border-blue-200'
+                        }`}
+                      >
+                        {dayAgendas.length} Agenda
+                      </span>
+                    </div>
+                  )}
+                  {dayDuty && (
+                    <span className="inline-flex items-center justify-center w-full px-1 py-0.5 rounded text-[9px] font-bold bg-teal-50 text-teal-800 border border-teal-200 truncate">
+                      Piket
+                    </span>
+                  )}
+                </div>
+
+                {/* Tablet & Desktop Detailed Event Chips (>= sm) */}
+                <div className="hidden sm:block flex-1 space-y-1 overflow-hidden">
                   {dayAgendas.slice(0, 3).map((item) => {
                     const isVip = item.priority === 'VIP';
                     return (
@@ -230,7 +254,7 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
                           e.stopPropagation();
                           onSelectAgenda(item);
                         }}
-                        className={`px-1.5 py-0.5 rounded-md text-[10px] sm:text-[11px] font-medium border truncate transition flex items-center justify-between gap-1 shadow-2xs hover:scale-[1.02] ${
+                        className={`px-1.5 py-0.5 rounded-md text-[11px] font-medium border truncate transition flex items-center justify-between gap-1 shadow-2xs hover:scale-[1.02] ${
                           isVip
                             ? 'bg-red-50 text-red-900 border-red-200 font-semibold'
                             : getCategoryColor(item.category)
@@ -280,12 +304,12 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
               <div
                 key={`next-${cell.dateStr}`}
                 onClick={() => setSelectedDayDate(cell.dateStr)}
-                className="bg-slate-50/60 p-1.5 sm:p-2 min-h-[95px] sm:min-h-[120px] opacity-45 cursor-pointer hover:opacity-80 transition flex flex-col"
+                className="bg-slate-50/60 p-1.5 sm:p-2 min-h-[72px] sm:min-h-[120px] opacity-45 cursor-pointer hover:opacity-80 transition flex flex-col"
               >
                 <span className="text-xs font-medium text-slate-400">{cell.day}</span>
                 {dayAgendas.length > 0 && (
                   <span className="text-[10px] text-slate-500 mt-1 font-semibold">
-                    {dayAgendas.length} agenda
+                    {dayAgendas.length}
                   </span>
                 )}
               </div>
@@ -493,7 +517,7 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
                     </div>
 
                     {/* Quick Sync & Sharing Action Buttons */}
-                    <div className="flex sm:flex-col items-center gap-1.5 shrink-0 pt-2 sm:pt-0">
+                    <div className="grid grid-cols-3 sm:flex sm:flex-col items-stretch gap-1.5 shrink-0 pt-2 sm:pt-0 w-full sm:w-auto">
                       <a
                         href={googleCalUrl}
                         target="_blank"
