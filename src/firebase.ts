@@ -1,8 +1,14 @@
 import { initializeApp } from 'firebase/app';
 import {
+  browserLocalPersistence,
+  browserSessionPersistence,
   getAuth,
+  getRedirectResult,
   GoogleAuthProvider,
+  inMemoryPersistence,
+  setPersistence,
   signInWithPopup,
+  signInWithRedirect,
   signOut,
   User
 } from 'firebase/auth';
@@ -16,6 +22,34 @@ import firebaseConfig from '../firebase-applet-config.json';
 export const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+
+let persistenceInitPromise: Promise<void> | null = null;
+
+/**
+ * Safely initialize Firebase Auth persistence with graceful fallbacks for
+ * strict mobile browsers, Safari ITP, and embedded iframe environments.
+ */
+export function ensureAuthPersistence(): Promise<void> {
+  if (!persistenceInitPromise) {
+    persistenceInitPromise = (async () => {
+      for (const persistence of [
+        browserLocalPersistence,
+        browserSessionPersistence,
+        inMemoryPersistence
+      ]) {
+        try {
+          await setPersistence(auth, persistence);
+          return;
+        } catch {
+          // Try next persistence storage tier
+        }
+      }
+    })();
+  }
+  return persistenceInitPromise;
+}
+
+void ensureAuthPersistence();
 
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
@@ -77,8 +111,24 @@ export function handleFirestoreError(
 }
 
 export async function signInWithGoogle(): Promise<User> {
+  await ensureAuthPersistence();
   const result = await signInWithPopup(auth, googleProvider);
   return result.user;
+}
+
+export async function signInWithGoogleRedirect(): Promise<void> {
+  await ensureAuthPersistence();
+  await signInWithRedirect(auth, googleProvider);
+}
+
+export async function checkGoogleRedirectResult(): Promise<User | null> {
+  try {
+    await ensureAuthPersistence();
+    const result = await getRedirectResult(auth);
+    return result?.user || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function signOutUser(): Promise<void> {

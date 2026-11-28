@@ -3,6 +3,7 @@ import { Printer, ArrowLeft, Download, Shield, FileDown, Loader2 } from 'lucide-
 import { AgendaItem, DailyJournalEntry, HolidayDutyEntry } from '../types/agenda';
 import { formatDateIndo, downloadMonthlyIcsFile } from '../utils/calendarSync';
 import { downloadMonthlyReportPdf } from '../utils/pdfExport';
+import { resolveLogoDataUrlForPdf } from '../utils/appLogo';
 
 interface OfficialPrintViewProps {
   agendas: AgendaItem[];
@@ -10,6 +11,7 @@ interface OfficialPrintViewProps {
   holidayDuties: HolidayDutyEntry[];
   selectedMonthName: string;
   selectedYear: number;
+  logoUrl: string;
   onBackToCalendar: () => void;
 }
 
@@ -19,11 +21,13 @@ export const OfficialPrintView: React.FC<OfficialPrintViewProps> = ({
   holidayDuties,
   selectedMonthName,
   selectedYear,
+  logoUrl,
   onBackToCalendar
 }) => {
   const [includePiket, setIncludePiket] = useState(true);
   const [includeJournal, setIncludeJournal] = useState(true);
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
 
   // Sort agendas by date and start time
   const sortedAgendas = [...agendas].sort((a, b) =>
@@ -39,9 +43,10 @@ export const OfficialPrintView: React.FC<OfficialPrintViewProps> = ({
     window.print();
   };
 
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
     setIsDownloadingPdf(true);
     try {
+      const logoDataUrl = await resolveLogoDataUrlForPdf(logoUrl);
       downloadMonthlyReportPdf({
         agendas: sortedAgendas,
         journals: sortedJournals,
@@ -49,7 +54,8 @@ export const OfficialPrintView: React.FC<OfficialPrintViewProps> = ({
         selectedMonthName,
         selectedYear,
         includePiket,
-        includeJournal
+        includeJournal,
+        logoDataUrl
       });
     } catch (err) {
       console.error('Gagal membuat PDF laporan bulanan:', err);
@@ -127,10 +133,20 @@ export const OfficialPrintView: React.FC<OfficialPrintViewProps> = ({
       <div className="bg-white p-6 sm:p-10 rounded-2xl border border-slate-200 shadow-md print:border-0 print:shadow-none print:p-0 max-w-5xl mx-auto">
         {/* Official Kop Header */}
         <div className="border-b-2 border-slate-900 pb-4 mb-6 text-center relative">
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-full border-2 border-slate-900 flex items-center justify-center p-2 text-slate-900">
-              <Shield className="w-7 h-7" />
-            </div>
+          <div className="flex items-center justify-center gap-4 mb-2">
+            {!logoFailed ? (
+              <img
+                src={logoUrl}
+                alt="Logo SUBAG TU PIM & PROTOKOL DITJENPAS"
+                referrerPolicy="no-referrer"
+                onError={() => setLogoFailed(true)}
+                className="w-16 h-16 object-contain shrink-0"
+              />
+            ) : (
+              <div className="w-14 h-14 rounded-full border-2 border-slate-900 flex items-center justify-center p-2 text-slate-900 shrink-0">
+                <Shield className="w-7 h-7" />
+              </div>
+            )}
             <div>
               <h2 className="text-sm sm:text-base font-extrabold uppercase tracking-widest text-slate-900">
                 SUBAG TU PIM &amp; PROTOKOL DITJENPAS

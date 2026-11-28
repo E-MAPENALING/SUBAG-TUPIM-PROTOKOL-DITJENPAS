@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'motion/react';
 import { 
   Calendar as CalendarIcon, ListOrdered, BarChart3, Printer, 
   Plus, Bell, BellRing, Download, Volume2, Sparkles, Shield,
@@ -27,6 +28,8 @@ interface HeaderProps {
   onSignInGoogle: () => void;
   onSignOut: () => void;
   isAuthLoading: boolean;
+  logoUrl: string;
+  onOpenLogoModal: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -48,19 +51,44 @@ export const Header: React.FC<HeaderProps> = ({
   userDisplayName,
   onSignInGoogle,
   onSignOut,
-  isAuthLoading
+  isAuthLoading,
+  logoUrl,
+  onOpenLogoModal
 }) => {
+  const [logoFailed, setLogoFailed] = React.useState(false);
+
+  React.useEffect(() => {
+    setLogoFailed(false);
+  }, [logoUrl]);
+
   return (
     <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-40 shadow-lg no-print">
       {/* Top Branding Bar */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         {/* App Title & Identity */}
         <div className="flex items-center gap-3.5">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 p-0.5 shadow-md shadow-amber-500/20 flex items-center justify-center shrink-0">
-            <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center text-amber-400">
-              <Shield className="w-6 h-6" />
+          <button
+            type="button"
+            onClick={onOpenLogoModal}
+            className="group relative w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-500 via-amber-400 to-yellow-300 p-0.5 shadow-md shadow-amber-500/20 flex items-center justify-center shrink-0 hover:scale-105 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+            title="Klik untuk melihat atau mengganti logo aplikasi"
+          >
+            <div className="w-full h-full bg-white rounded-[14px] flex items-center justify-center overflow-hidden p-0.5">
+              {!logoFailed ? (
+                <img
+                  src={logoUrl}
+                  alt="Logo SUBAG TU PIM & PROTOKOL DITJENPAS"
+                  referrerPolicy="no-referrer"
+                  onError={() => setLogoFailed(true)}
+                  className="w-full h-full object-contain"
+                />
+              ) : (
+                <div className="w-full h-full bg-slate-950 rounded-[12px] flex items-center justify-center text-amber-400">
+                  <Shield className="w-6 h-6" />
+                </div>
+              )}
             </div>
-          </div>
+          </button>
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-base sm:text-xl font-extrabold tracking-tight text-white flex items-center gap-2">
@@ -177,87 +205,96 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="bg-slate-950/60 border-t border-slate-800/80">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between overflow-x-auto py-2">
           {/* View Tabs */}
-          <div className="flex items-center gap-1 sm:gap-2">
-            <button
-              onClick={() => onViewChange('calendar')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold transition ${
-                activeView === 'calendar'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <CalendarIcon className="w-4 h-4" />
-              <span>Kalender Bulanan</span>
-            </button>
-
-            <button
-              onClick={() => onViewChange('list')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold transition whitespace-nowrap ${
-                activeView === 'list'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <ListOrdered className="w-4 h-4" />
-              <span>Daftar Agenda</span>
-              <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeView === 'list' ? 'bg-blue-800 text-blue-200' : 'bg-slate-800 text-slate-300'}`}>
-                {totalAgendasThisMonth}
-              </span>
-            </button>
-
-            <button
-              onClick={() => onViewChange('journal')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold transition whitespace-nowrap ${
-                activeView === 'journal'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <BookOpen className="w-4 h-4" />
-              <span>Jurnal Harian</span>
-              <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeView === 'journal' ? 'bg-indigo-800 text-indigo-200' : 'bg-slate-800 text-slate-300'}`}>
-                {totalJournalsThisMonth}
-              </span>
-            </button>
-
-            <button
-              onClick={() => onViewChange('piket')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold transition whitespace-nowrap ${
-                activeView === 'piket'
-                  ? 'bg-teal-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <ShieldCheck className="w-4 h-4" />
-              <span>Piket Hari Libur</span>
-              <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${activeView === 'piket' ? 'bg-teal-800 text-teal-200' : 'bg-slate-800 text-slate-300'}`}>
-                {totalDutiesThisMonth}
-              </span>
-            </button>
-
-            <button
-              onClick={() => onViewChange('dashboard')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold transition whitespace-nowrap ${
-                activeView === 'dashboard'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <BarChart3 className="w-4 h-4" />
-              <span>Dashboard</span>
-            </button>
-
-            <button
-              onClick={() => onViewChange('print')}
-              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold transition whitespace-nowrap ${
-                activeView === 'print'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <Printer className="w-4 h-4" />
-              <span>Cetak Resmi</span>
-            </button>
+          <div role="tablist" aria-label="Navigasi tampilan agenda" className="flex items-center gap-1 sm:gap-2">
+            {(
+              [
+                {
+                  id: 'calendar' as ViewMode,
+                  label: 'Kalender Bulanan',
+                  icon: CalendarIcon,
+                  activeBg: 'bg-blue-600',
+                  activeBadgeBg: 'bg-blue-800 text-blue-200',
+                  count: undefined
+                },
+                {
+                  id: 'list' as ViewMode,
+                  label: 'Daftar Agenda',
+                  icon: ListOrdered,
+                  activeBg: 'bg-blue-600',
+                  activeBadgeBg: 'bg-blue-800 text-blue-200',
+                  count: totalAgendasThisMonth
+                },
+                {
+                  id: 'journal' as ViewMode,
+                  label: 'Jurnal Harian',
+                  icon: BookOpen,
+                  activeBg: 'bg-indigo-600',
+                  activeBadgeBg: 'bg-indigo-800 text-indigo-200',
+                  count: totalJournalsThisMonth
+                },
+                {
+                  id: 'piket' as ViewMode,
+                  label: 'Piket Hari Libur',
+                  icon: ShieldCheck,
+                  activeBg: 'bg-teal-600',
+                  activeBadgeBg: 'bg-teal-800 text-teal-200',
+                  count: totalDutiesThisMonth
+                },
+                {
+                  id: 'dashboard' as ViewMode,
+                  label: 'Dashboard',
+                  icon: BarChart3,
+                  activeBg: 'bg-blue-600',
+                  activeBadgeBg: 'bg-blue-800 text-blue-200',
+                  count: undefined
+                },
+                {
+                  id: 'print' as ViewMode,
+                  label: 'Cetak Resmi',
+                  icon: Printer,
+                  activeBg: 'bg-blue-600',
+                  activeBadgeBg: 'bg-blue-800 text-blue-200',
+                  count: undefined
+                }
+              ] as const
+            ).map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeView === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => onViewChange(tab.id)}
+                  className={`relative flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
+                    isActive
+                      ? 'text-white'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
+                  }`}
+                >
+                  {isActive && (
+                    <motion.span
+                      layoutId="activeViewTabIndicator"
+                      aria-hidden="true"
+                      transition={{ type: 'spring', stiffness: 520, damping: 38 }}
+                      className={`absolute inset-0 rounded-xl shadow-sm ${tab.activeBg}`}
+                    />
+                  )}
+                  <Icon className="relative z-10 w-4 h-4 shrink-0" />
+                  <span className="relative z-10">{tab.label}</span>
+                  {tab.count !== undefined && (
+                    <span
+                      className={`relative z-10 px-1.5 py-0.2 rounded-full text-[10px] transition-colors ${
+                        isActive ? tab.activeBadgeBg : 'bg-slate-800 text-slate-300'
+                      }`}
+                    >
+                      {tab.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
 
           {/* Current Periode Pill */}

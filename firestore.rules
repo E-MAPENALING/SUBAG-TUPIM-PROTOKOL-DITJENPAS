@@ -43,6 +43,31 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/users/$(userId));
     }
 
+    function parentSharedEmails(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data.sharedEmails;
+    }
+
+    // Pillar 1 Master Gate: Collaborator access is strictly derived from the parent user profile's sharedEmails allowlist
+    function isWorkspaceCollaborator(userId) {
+      return isVerifiedUser()
+        && request.auth.token.email is string
+        && userProfileExists(userId)
+        && 'sharedEmails' in get(/databases/$(database)/documents/users/$(userId)).data
+        && parentSharedEmails(userId) is list
+        && request.auth.token.email in parentSharedEmails(userId);
+    }
+
+    function isWorkspaceMember(userId) {
+      return isVerifiedOwner(userId) || isWorkspaceCollaborator(userId);
+    }
+
+    // Prevents collaborators from tampering with sharedEmails when creating subcollection records
+    function collaboratorSharedEmailsMatch(userId, data) {
+      return isVerifiedOwner(userId) || (
+        'sharedEmails' in data && data.sharedEmails == parentSharedEmails(userId)
+      );
+    }
+
     function isValidOptionalString(data, field, maxLen) {
       return !(field in data) || (data[field] is string && data[field].size() <= maxLen);
     }
@@ -53,6 +78,14 @@ service cloud.firestore {
 
     function isValidTimeStr(val) {
       return val is string && val.size() == 5 && val.matches('^\\d{2}:\\d{2}$');
+    }
+
+    function isValidSharedEmails(data) {
+      return !('sharedEmails' in data) || (
+        data.sharedEmails is list
+        && data.sharedEmails.size() <= 15
+        && (data.sharedEmails.size() == 0 || (data.sharedEmails[0] is string && data.sharedEmails[0].size() >= 3 && data.sharedEmails[0].size() <= 254))
+      );
     }
 
     function isValidDocumentList(listVal) {
@@ -87,12 +120,14 @@ service cloud.firestore {
 
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll(['ownerId', 'email', 'displayName', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['ownerId', 'email', 'displayName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'email', 'displayName', 'sharedEmails', 'customLogo', 'createdAt', 'updatedAt'])
         && isValidId(data.ownerId)
         && data.ownerId == request.auth.uid
         && data.ownerId == userId
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 150
+        && isValidSharedEmails(data)
+        && isValidOptionalString(data, 'customLogo', 450000)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -107,12 +142,11 @@ service cloud.firestore {
           'id', 'ownerId', 'title', 'category', 'leader', 'leaderName',
           'companions', 'date', 'startTime', 'endTime', 'location',
           'virtualMeetingUrl', 'dressCode', 'priority', 'status', 'notes',
-          'documents', 'reminder', 'createdAt', 'updatedAt'
+          'documents', 'reminder', 'sharedEmails', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
         && data.id == agendaId
         && isValidId(data.ownerId)
-        && data.ownerId == request.auth.uid
         && data.ownerId == userId
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
         && data.category is string && data.category.size() >= 1 && data.category.size() <= 80
@@ -130,6 +164,7 @@ service cloud.firestore {
         && isValidOptionalString(data, 'notes', 3000)
         && isValidDocumentList(data.documents)
         && isValidReminderMap(data.reminder)
+        && isValidSharedEmails(data)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -144,12 +179,11 @@ service cloud.firestore {
           'id', 'ownerId', 'date', 'time', 'title',
           'relatedAgendaId', 'relatedAgendaTitle', 'leaderName',
           'location', 'reporterName', 'reporterRole', 'summary',
-          'followUp', 'outcome', 'documents', 'createdAt', 'updatedAt'
+          'followUp', 'outcome', 'documents', 'sharedEmails', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
         && data.id == journalId
         && isValidId(data.ownerId)
-        && data.ownerId == request.auth.uid
         && data.ownerId == userId
         && isValidDateStr(data.date)
         && isValidTimeStr(data.time)
@@ -164,6 +198,7 @@ service cloud.firestore {
         && isValidOptionalString(data, 'followUp', 3000)
         && data.outcome in ['Lancar & Kondusif', 'Perlu Tindak Lanjut', 'Ada Kendala', 'Selesai Dilaporkan']
         && isValidDocumentList(data.documents)
+        && isValidSharedEmails(data)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -176,12 +211,11 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'id', 'ownerId', 'date', 'holidayName', 'dayType', 'shift',
           'coordinatorName', 'coordinatorPhone', 'officers', 'standbyLocation',
-          'notes', 'createdAt', 'updatedAt'
+          'notes', 'sharedEmails', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
         && data.id == dutyId
         && isValidId(data.ownerId)
-        && data.ownerId == request.auth.uid
         && data.ownerId == userId
         && isValidDateStr(data.date)
         && data.holidayName is string && data.holidayName.size() >= 1 && data.holidayName.size() <= 200
@@ -192,20 +226,21 @@ service cloud.firestore {
         && isValidOfficerList(data.officers)
         && data.standbyLocation is string && data.standbyLocation.size() >= 1 && data.standbyLocation.size() <= 250
         && isValidOptionalString(data, 'notes', 2000)
+        && isValidSharedEmails(data)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
 
     function isValidAttachmentChunk(data, userId) {
       return data.keys().hasAll(['ownerId', 'attachmentId', 'chunkIndex', 'totalChunks', 'data', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['ownerId', 'attachmentId', 'chunkIndex', 'totalChunks', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'attachmentId', 'chunkIndex', 'totalChunks', 'data', 'sharedEmails', 'createdAt', 'updatedAt'])
         && isValidId(data.ownerId)
-        && data.ownerId == request.auth.uid
         && data.ownerId == userId
         && isValidId(data.attachmentId)
         && data.chunkIndex is number && data.chunkIndex >= 0 && data.chunkIndex < 30
         && data.totalChunks is number && data.totalChunks >= 1 && data.totalChunks <= 30
         && data.data is string && data.data.size() >= 1 && data.data.size() <= 600000
+        && isValidSharedEmails(data)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -213,7 +248,11 @@ service cloud.firestore {
     // ==================== COLLECTION RULES ====================
 
     match /users/{userId} {
-      allow get: if isVerifiedOwner(userId) && isValidId(userId) && (resource == null || existing().ownerId == request.auth.uid);
+      // Owner can read own profile; explicitly allowlisted collaborators can read parent workspace metadata to verify membership & sync logo
+      allow get: if isVerifiedUser() && isValidId(userId) && (
+        (request.auth.uid == userId && (resource == null || existing().ownerId == request.auth.uid)) ||
+        (resource != null && 'sharedEmails' in existing() && existing().sharedEmails is list && request.auth.token.email in existing().sharedEmails)
+      );
       allow list: if false;
       allow create: if isVerifiedOwner(userId)
         && isValidId(userId)
@@ -227,138 +266,212 @@ service cloud.firestore {
         && incoming().ownerId == existing().ownerId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt']);
+        && (
+          // Action 1: Profile metadata sync
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'updatedAt']) ||
+          // Action 2: Custom institutional logo update
+          incoming().diff(existing()).affectedKeys().hasOnly(['customLogo', 'updatedAt']) ||
+          // Action 3: Authorized collaborator email allowlist update
+          incoming().diff(existing()).affectedKeys().hasOnly(['sharedEmails', 'updatedAt'])
+        );
       allow delete: if false;
 
       // Leadership Agendas
       match /agendas/{agendaId} {
-        allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(agendaId) && (resource == null || existing().ownerId == request.auth.uid);
-        allow list: if isVerifiedOwner(userId) && existing().ownerId == request.auth.uid;
-        allow create: if isVerifiedOwner(userId)
+        allow get: if isVerifiedUser() && isValidId(userId) && isValidId(agendaId) && (
+          (request.auth.uid == userId && (resource == null || existing().ownerId == request.auth.uid)) ||
+          (isWorkspaceCollaborator(userId) && (resource == null || existing().ownerId == userId))
+        );
+        // Pillar 8: Zero get()/exists() in list; strictly scoped by ownerId or mirrored sharedEmails allowlist
+        allow list: if isVerifiedUser() && (
+          (request.auth.uid == userId && existing().ownerId == request.auth.uid) ||
+          ('sharedEmails' in existing() && existing().sharedEmails is list && request.auth.token.email in existing().sharedEmails)
+        );
+        allow create: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(agendaId)
           && isValidAgenda(incoming(), userId, agendaId)
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
-          && userProfileExists(userId);
-        allow update: if isVerifiedOwner(userId)
+          && userProfileExists(userId)
+          && isWorkspaceMember(userId)
+          && collaboratorSharedEmailsMatch(userId, incoming());
+        allow update: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(agendaId)
           && isValidAgenda(incoming(), userId, agendaId)
-          && existing().ownerId == request.auth.uid
+          && existing().ownerId == userId
           && incoming().ownerId == existing().ownerId
           && incoming().id == existing().id
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && userProfileExists(userId)
+          && isWorkspaceMember(userId)
           && (existing().status != 'Dibatalkan' || isAdmin())
           && (
             // Action 1: Quick status update
             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']) ||
             // Action 2: Reminder snooze / trigger update
             incoming().diff(existing()).affectedKeys().hasOnly(['reminder', 'updatedAt']) ||
-            // Action 3: Full agenda edit by owner
-            incoming().diff(existing()).affectedKeys().hasOnly([
+            // Action 3: Owner collaborator allowlist sync
+            (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['sharedEmails', 'updatedAt'])) ||
+            // Action 4: Full agenda edit by workspace member (collaborators cannot mutate sharedEmails)
+            (incoming().diff(existing()).affectedKeys().hasOnly([
               'title', 'category', 'leader', 'leaderName', 'companions',
               'date', 'startTime', 'endTime', 'location', 'virtualMeetingUrl',
               'dressCode', 'priority', 'status', 'notes', 'documents', 'reminder', 'updatedAt'
-            ])
+            ])) ||
+            // Action 5: Full agenda edit with allowlist sync by owner
+            (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'category', 'leader', 'leaderName', 'companions',
+              'date', 'startTime', 'endTime', 'location', 'virtualMeetingUrl',
+              'dressCode', 'priority', 'status', 'notes', 'documents', 'reminder',
+              'sharedEmails', 'updatedAt'
+            ]))
           );
-        allow delete: if isVerifiedOwner(userId)
+        allow delete: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(agendaId)
-          && existing().ownerId == request.auth.uid
-          && userProfileExists(userId);
+          && existing().ownerId == userId
+          && userProfileExists(userId)
+          && isWorkspaceMember(userId);
       }
 
       // Daily Activity Journals
       match /journals/{journalId} {
-        allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(journalId) && (resource == null || existing().ownerId == request.auth.uid);
-        allow list: if isVerifiedOwner(userId) && existing().ownerId == request.auth.uid;
-        allow create: if isVerifiedOwner(userId)
+        allow get: if isVerifiedUser() && isValidId(userId) && isValidId(journalId) && (
+          (request.auth.uid == userId && (resource == null || existing().ownerId == request.auth.uid)) ||
+          (isWorkspaceCollaborator(userId) && (resource == null || existing().ownerId == userId))
+        );
+        allow list: if isVerifiedUser() && (
+          (request.auth.uid == userId && existing().ownerId == request.auth.uid) ||
+          ('sharedEmails' in existing() && existing().sharedEmails is list && request.auth.token.email in existing().sharedEmails)
+        );
+        allow create: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(journalId)
           && isValidJournal(incoming(), userId, journalId)
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
-          && userProfileExists(userId);
-        allow update: if isVerifiedOwner(userId)
+          && userProfileExists(userId)
+          && isWorkspaceMember(userId)
+          && collaboratorSharedEmailsMatch(userId, incoming());
+        allow update: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(journalId)
           && isValidJournal(incoming(), userId, journalId)
-          && existing().ownerId == request.auth.uid
+          && existing().ownerId == userId
           && incoming().ownerId == existing().ownerId
           && incoming().id == existing().id
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && userProfileExists(userId)
+          && isWorkspaceMember(userId)
           && (existing().outcome != 'Selesai Dilaporkan' || isAdmin())
           && (
             // Action 1: Outcome status update
             incoming().diff(existing()).affectedKeys().hasOnly(['outcome', 'updatedAt']) ||
-            // Action 2: Full journal edit by owner
+            // Action 2: Owner collaborator allowlist sync
+            (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['sharedEmails', 'updatedAt'])) ||
+            // Action 3: Full journal edit by workspace member (collaborators cannot mutate sharedEmails)
             incoming().diff(existing()).affectedKeys().hasOnly([
               'date', 'time', 'title', 'relatedAgendaId', 'relatedAgendaTitle',
               'leaderName', 'location', 'reporterName', 'reporterRole',
               'summary', 'followUp', 'outcome', 'documents', 'updatedAt'
-            ])
+            ]) ||
+            // Action 4: Full journal edit with allowlist sync by owner
+            (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly([
+              'date', 'time', 'title', 'relatedAgendaId', 'relatedAgendaTitle',
+              'leaderName', 'location', 'reporterName', 'reporterRole',
+              'summary', 'followUp', 'outcome', 'documents', 'sharedEmails', 'updatedAt'
+            ]))
           );
-        allow delete: if isVerifiedOwner(userId)
+        allow delete: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(journalId)
-          && existing().ownerId == request.auth.uid
-          && userProfileExists(userId);
+          && existing().ownerId == userId
+          && userProfileExists(userId)
+          && isWorkspaceMember(userId);
       }
 
       // Holiday Protocol Duty Rosters
       match /holidayDuties/{dutyId} {
-        allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(dutyId) && (resource == null || existing().ownerId == request.auth.uid);
-        allow list: if isVerifiedOwner(userId) && existing().ownerId == request.auth.uid;
-        allow create: if isVerifiedOwner(userId)
+        allow get: if isVerifiedUser() && isValidId(userId) && isValidId(dutyId) && (
+          (request.auth.uid == userId && (resource == null || existing().ownerId == request.auth.uid)) ||
+          (isWorkspaceCollaborator(userId) && (resource == null || existing().ownerId == userId))
+        );
+        allow list: if isVerifiedUser() && (
+          (request.auth.uid == userId && existing().ownerId == request.auth.uid) ||
+          ('sharedEmails' in existing() && existing().sharedEmails is list && request.auth.token.email in existing().sharedEmails)
+        );
+        allow create: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(dutyId)
           && isValidHolidayDuty(incoming(), userId, dutyId)
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
-          && userProfileExists(userId);
-        allow update: if isVerifiedOwner(userId)
+          && userProfileExists(userId)
+          && isWorkspaceMember(userId)
+          && collaboratorSharedEmailsMatch(userId, incoming());
+        allow update: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(dutyId)
           && isValidHolidayDuty(incoming(), userId, dutyId)
-          && existing().ownerId == request.auth.uid
+          && existing().ownerId == userId
           && incoming().ownerId == existing().ownerId
           && incoming().id == existing().id
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && userProfileExists(userId)
-          && incoming().diff(existing()).affectedKeys().hasOnly([
-            'date', 'holidayName', 'dayType', 'shift', 'coordinatorName',
-            'coordinatorPhone', 'officers', 'standbyLocation', 'notes', 'updatedAt'
-          ]);
-        allow delete: if isVerifiedOwner(userId)
+          && isWorkspaceMember(userId)
+          && (
+            // Action 1: Owner collaborator allowlist sync
+            (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['sharedEmails', 'updatedAt'])) ||
+            // Action 2: Full holiday duty edit by workspace member
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'date', 'holidayName', 'dayType', 'shift', 'coordinatorName',
+              'coordinatorPhone', 'officers', 'standbyLocation', 'notes', 'updatedAt'
+            ]) ||
+            // Action 3: Full holiday duty edit with allowlist sync by owner
+            (isVerifiedOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly([
+              'date', 'holidayName', 'dayType', 'shift', 'coordinatorName',
+              'coordinatorPhone', 'officers', 'standbyLocation', 'notes', 'sharedEmails', 'updatedAt'
+            ]))
+          );
+        allow delete: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(dutyId)
-          && existing().ownerId == request.auth.uid
-          && userProfileExists(userId);
+          && existing().ownerId == userId
+          && userProfileExists(userId)
+          && isWorkspaceMember(userId);
       }
 
       // Chunked PDF / Image Attachments
       match /attachmentChunks/{chunkId} {
-        allow get: if isVerifiedOwner(userId) && isValidId(userId) && isValidId(chunkId) && (resource == null || existing().ownerId == request.auth.uid);
-        allow list: if isVerifiedOwner(userId) && existing().ownerId == request.auth.uid;
-        allow create: if isVerifiedOwner(userId)
+        allow get: if isVerifiedUser() && isValidId(userId) && isValidId(chunkId) && (
+          (request.auth.uid == userId && (resource == null || existing().ownerId == request.auth.uid)) ||
+          (isWorkspaceCollaborator(userId) && (resource == null || existing().ownerId == userId))
+        );
+        allow list: if isVerifiedUser() && (
+          (request.auth.uid == userId && existing().ownerId == request.auth.uid) ||
+          ('sharedEmails' in existing() && existing().sharedEmails is list && request.auth.token.email in existing().sharedEmails)
+        );
+        allow create: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(chunkId)
           && isValidAttachmentChunk(incoming(), userId)
           && incoming().createdAt == request.time
           && incoming().updatedAt == request.time
-          && userProfileExists(userId);
+          && userProfileExists(userId)
+          && isWorkspaceMember(userId)
+          && collaboratorSharedEmailsMatch(userId, incoming());
         allow update: if false;
-        allow delete: if isVerifiedOwner(userId)
+        allow delete: if isVerifiedUser()
           && isValidId(userId)
           && isValidId(chunkId)
-          && existing().ownerId == request.auth.uid
-          && userProfileExists(userId);
+          && existing().ownerId == userId
+          && userProfileExists(userId)
+          && isWorkspaceMember(userId);
       }
     }
   }

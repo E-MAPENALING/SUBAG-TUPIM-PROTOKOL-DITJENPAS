@@ -20,6 +20,15 @@
           "type": "string",
           "maxLength": 150
         },
+        "sharedEmails": {
+          "type": "array",
+          "description": "Bounded list of owner-authorized collaborator email addresses (max 15) for multi-account HP/PC sync."
+        },
+        "customLogo": {
+          "type": "string",
+          "maxLength": 450000,
+          "description": "Optional synced PNG/JPG data URL for institutional emblem logo."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -121,6 +130,10 @@
         "reminder": {
           "type": "object",
           "description": "Reminder settings map."
+        },
+        "sharedEmails": {
+          "type": "array",
+          "description": "Owner-authorized collaborator emails mirrored for secure list queries (max 15)."
         },
         "createdAt": {
           "type": "string",
@@ -228,6 +241,10 @@
           "type": "array",
           "description": "Bounded attachment metadata list (max 15 items)."
         },
+        "sharedEmails": {
+          "type": "array",
+          "description": "Owner-authorized collaborator emails mirrored for secure list queries (max 15)."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -321,6 +338,10 @@
           "type": "string",
           "maxLength": 2000
         },
+        "sharedEmails": {
+          "type": "array",
+          "description": "Owner-authorized collaborator emails mirrored for secure list queries (max 15)."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time"
@@ -371,6 +392,10 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 600000
+        },
+        "sharedEmails": {
+          "type": "array",
+          "description": "Owner-authorized collaborator emails mirrored for secure list queries (max 15)."
         },
         "createdAt": {
           "type": "string",

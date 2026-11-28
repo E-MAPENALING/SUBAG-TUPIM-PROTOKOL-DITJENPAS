@@ -11,6 +11,7 @@ export interface MonthlyReportPdfOptions {
   selectedYear: number;
   includePiket: boolean;
   includeJournal: boolean;
+  logoDataUrl?: string | null;
 }
 
 type JsPdfWithAutoTable = jsPDF & {
@@ -26,7 +27,8 @@ export function downloadMonthlyReportPdf({
   selectedMonthName,
   selectedYear,
   includePiket,
-  includeJournal
+  includeJournal,
+  logoDataUrl
 }: MonthlyReportPdfOptions): void {
   const doc = new jsPDF({
     orientation: 'landscape',
@@ -48,18 +50,36 @@ export function downloadMonthlyReportPdf({
   // ==================== OFFICIAL KOP SURAT ====================
   let y = 14;
 
-  // Emblem shield icon (crisp vector badge on left of Kop)
-  const emblemCenterX = marginX + 18;
-  const emblemCenterY = y + 7;
-  doc.setDrawColor(15, 23, 42);
-  doc.setLineWidth(0.6);
-  doc.circle(emblemCenterX, emblemCenterY, 7, 'S');
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
-  doc.setTextColor(15, 23, 42);
-  doc.text('TU PIM', emblemCenterX, emblemCenterY - 0.8, { align: 'center' });
-  doc.setFontSize(5.5);
-  doc.text('DITJENPAS', emblemCenterX, emblemCenterY + 2.8, { align: 'center' });
+  // Official institutional emblem on left of Kop Surat
+  if (logoDataUrl) {
+    try {
+      doc.addImage(logoDataUrl, 'PNG', marginX + 10, y - 1.5, 16, 16);
+    } catch {
+      const emblemCenterX = marginX + 18;
+      const emblemCenterY = y + 7;
+      doc.setDrawColor(15, 23, 42);
+      doc.setLineWidth(0.6);
+      doc.circle(emblemCenterX, emblemCenterY, 7, 'S');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(15, 23, 42);
+      doc.text('TU PIM', emblemCenterX, emblemCenterY - 0.8, { align: 'center' });
+      doc.setFontSize(5.5);
+      doc.text('DITJENPAS', emblemCenterX, emblemCenterY + 2.8, { align: 'center' });
+    }
+  } else {
+    const emblemCenterX = marginX + 18;
+    const emblemCenterY = y + 7;
+    doc.setDrawColor(15, 23, 42);
+    doc.setLineWidth(0.6);
+    doc.circle(emblemCenterX, emblemCenterY, 7, 'S');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text('TU PIM', emblemCenterX, emblemCenterY - 0.8, { align: 'center' });
+    doc.setFontSize(5.5);
+    doc.text('DITJENPAS', emblemCenterX, emblemCenterY + 2.8, { align: 'center' });
+  }
 
   // Institutional header lines
   doc.setFont('helvetica', 'bold');

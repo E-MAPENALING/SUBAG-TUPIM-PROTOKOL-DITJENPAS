@@ -4,7 +4,9 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
+  getDocsFromServer,
   onSnapshot,
   query,
   serverTimestamp,
@@ -39,6 +41,7 @@ const CHUNK_SIZE = 480_000;
 const MAX_CHUNKS = 30;
 const MAX_DOCUMENTS = 15;
 const MAX_OFFICERS = 30;
+const MAX_SHARED_EMAILS = 15;
 
 const VALID_PRIORITIES: Priority[] = ['VIP', 'Tinggi', 'Sedang', 'Rutin'];
 const VALID_STATUSES: AgendaStatus[] = ['Terjadwal', 'Berlangsung', 'Selesai', 'Ditunda', 'Dibatalkan'];
@@ -59,6 +62,21 @@ const VALID_SHIFTS: DutyShift[] = [
   'Shift Pagi (07:30 - 14:00)',
   'Shift Siang/Sore (14:00 - 20:00)'
 ];
+
+export interface WorkspaceTarget {
+  ownerUid: string;
+  viewerUid: string;
+  viewerEmail: string;
+  sharedEmails: string[];
+}
+
+export interface WorkspaceProfileData {
+  ownerId: string;
+  email: string;
+  displayName: string;
+  sharedEmails: string[];
+  customLogo: string;
+}
 
 function sanitizeId(raw: string | undefined, prefix: string): string {
   const cleaned = (raw || '')
@@ -87,6 +105,20 @@ function sanitizeTime(val: string | undefined, fallback = '08:00'): string {
     return val.trim();
   }
   return fallback;
+}
+
+export function sanitizeEmailList(emails: string[] | undefined): string[] {
+  if (!Array.isArray(emails)) return [];
+  const unique = new Set<string>();
+  for (const raw of emails) {
+    if (typeof raw !== 'string') continue;
+    const cleaned = raw.trim().toLowerCase().slice(0, 254);
+    if (cleaned.length >= 3 && cleaned.includes('@')) {
+      unique.add(cleaned);
+    }
+    if (unique.size >= MAX_SHARED_EMAILS) break;
+  }
+  return Array.from(unique);
 }
 
 function timestampToIso(val: unknown): string {
@@ -146,12 +178,26 @@ function sanitizeOfficers(officers: ProtocolOfficer[] | undefined, fallbackName:
   return valid;
 }
 
-// ==================== USER PROFILE ====================
+function buildCollectionQuery(
+  target: WorkspaceTarget,
+  subcollection: 'agendas' | 'journals' | 'holidayDuties'
+) {
+  const colRef = collection(db, 'users', target.ownerUid, subcollection);
+  if (target.ownerUid === target.viewerUid) {
+    return query(colRef, where('ownerId', '==', target.ownerUid));
+  }
+  return query(colRef, where('sharedEmails', 'array-contains', target.viewerEmail.trim().toLowerCase()));
+}
 
-export async function ensureUserProfile(user: User): Promise<{ isNewProfile: boolean }> {
+// ==================== USER PROFILE & WORKSPACE ACCESS ====================
+
+export async function ensureUserProfile(user: User): Promise<{
+  isNewProfile: boolean;
+  profile: WorkspaceProfileData;
+}> {
   const path = `users/${user.uid}`;
   const userRef = doc(db, 'users', user.uid);
-  const email = clampString(user.email || '', 254, 'user@example.com');
+  const email = clampString(user.email?.toLowerCase() || '', 254, 'user@example.com');
   const displayName = clampString(user.displayName || user.email?.split('@')[0] || 'Pengguna', 150, 'Pengguna');
 
   try {
@@ -161,24 +207,178 @@ export async function ensureUserProfile(user: User): Promise<{ isNewProfile: boo
         ownerId: user.uid,
         email,
         displayName,
+        sharedEmails: [],
+        customLogo: '',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
-      return { isNewProfile: true };
+      return {
+        isNewProfile: true,
+        profile: {
+          ownerId: user.uid,
+          email,
+          displayName,
+          sharedEmails: [],
+          customLogo: ''
+        }
+      };
     }
 
     const existingData = snap.data();
     if (existingData.email !== email || existingData.displayName !== displayName) {
-      await updateDoc(userRef, {
-        email,
-        displayName,
-        updatedAt: serverTimestamp()
-      });
+      try {
+        await updateDoc(userRef, {
+          email,
+          displayName,
+          updatedAt: serverTimestamp()
+        });
+      } catch (updateErr) {
+        console.warn('Sinkronisasi metadata profil dilewati:', updateErr);
+      }
     }
-    return { isNewProfile: false };
+    return {
+      isNewProfile: false,
+      profile: {
+        ownerId: String(existingData.ownerId || user.uid),
+        email: String(existingData.email || email),
+        displayName: String(existingData.displayName || displayName),
+        sharedEmails: sanitizeEmailList(existingData.sharedEmails as string[] | undefined),
+        customLogo: typeof existingData.customLogo === 'string' ? existingData.customLogo : ''
+      }
+    };
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
   }
+}
+
+export async function verifyWorkspaceAccess(
+  ownerUid: string,
+  viewerUid: string,
+  viewerEmail: string
+): Promise<{ ok: boolean; profile?: WorkspaceProfileData; reason?: string }> {
+  const cleanOwnerUid = ownerUid.trim();
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(cleanOwnerUid)) {
+    return { ok: false, reason: 'ID Ruang Kerja tidak valid.' };
+  }
+  const userRef = doc(db, 'users', cleanOwnerUid);
+  try {
+    const snap = await getDocFromServer(userRef);
+    if (!snap.exists()) {
+      return { ok: false, reason: 'Ruang kerja tidak ditemukan.' };
+    }
+    const data = snap.data();
+    const sharedEmails = sanitizeEmailList(data.sharedEmails as string[] | undefined);
+    const normalizedViewer = viewerEmail.trim().toLowerCase();
+    const allowed = cleanOwnerUid === viewerUid || sharedEmails.includes(normalizedViewer);
+    if (!allowed) {
+      return {
+        ok: false,
+        reason: `Email ${normalizedViewer} belum diizinkan pada ruang kerja tersebut. Tambahkan email ini terlebih dahulu di menu HP ↔ PC pada perangkat pemilik.`
+      };
+    }
+    return {
+      ok: true,
+      profile: {
+        ownerId: String(data.ownerId || cleanOwnerUid),
+        email: String(data.email || ''),
+        displayName: String(data.displayName || ''),
+        sharedEmails,
+        customLogo: typeof data.customLogo === 'string' ? data.customLogo : ''
+      }
+    };
+  } catch {
+    return {
+      ok: false,
+      reason: `Akses ditolak. Pastikan pemilik ruang kerja telah menambahkan email ${viewerEmail.trim().toLowerCase()} di daftar Email HP/Tim yang diizinkan.`
+    };
+  }
+}
+
+export function subscribeWorkspaceProfile(
+  ownerUid: string,
+  onProfile: (profile: WorkspaceProfileData) => void,
+  onError: (err: Error) => void
+): () => void {
+  const path = `users/${ownerUid}`;
+  const userRef = doc(db, 'users', ownerUid);
+  return onSnapshot(
+    userRef,
+    (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      onProfile({
+        ownerId: String(data.ownerId || ownerUid),
+        email: String(data.email || ''),
+        displayName: String(data.displayName || ''),
+        sharedEmails: sanitizeEmailList(data.sharedEmails as string[] | undefined),
+        customLogo: typeof data.customLogo === 'string' ? data.customLogo : ''
+      });
+    },
+    (err) => {
+      try {
+        handleFirestoreError(err, OperationType.GET, path);
+      } catch (wrapped) {
+        onError(wrapped as Error);
+      }
+    }
+  );
+}
+
+export async function saveWorkspaceCustomLogo(ownerUid: string, logoDataUrl: string): Promise<void> {
+  const path = `users/${ownerUid}`;
+  const userRef = doc(db, 'users', ownerUid);
+  const clamped = logoDataUrl ? logoDataUrl.slice(0, 450_000) : '';
+  try {
+    await updateDoc(userRef, {
+      customLogo: clamped,
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function updateWorkspaceSharedEmails(
+  ownerUid: string,
+  rawEmails: string[]
+): Promise<string[]> {
+  const normalized = sanitizeEmailList(rawEmails);
+  const profilePath = `users/${ownerUid}`;
+  try {
+    await updateDoc(doc(db, 'users', ownerUid), {
+      sharedEmails: normalized,
+      updatedAt: serverTimestamp()
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, profilePath);
+  }
+
+  // Mirror sharedEmails to existing subcollection docs so collaborators' list queries include all records
+  const subcollections: Array<'agendas' | 'journals' | 'holidayDuties'> = [
+    'agendas',
+    'journals',
+    'holidayDuties'
+  ];
+  for (const sub of subcollections) {
+    const colPath = `users/${ownerUid}/${sub}`;
+    try {
+      const snaps = await getDocs(query(collection(db, 'users', ownerUid, sub), where('ownerId', '==', ownerUid)));
+      for (const docSnap of snaps.docs) {
+        try {
+          await updateDoc(docSnap.ref, {
+            sharedEmails: normalized,
+            updatedAt: serverTimestamp()
+          });
+        } catch {
+          // Skip terminal locked records for non-admin owners without aborting the allowlist sync
+        }
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.LIST, colPath);
+    }
+  }
+
+  return normalized;
 }
 
 // ==================== CHUNKED ATTACHMENT STORAGE ====================
@@ -193,13 +393,14 @@ interface CloudDocumentMeta {
 }
 
 async function prepareDocumentsForCloud(
-  uid: string,
+  target: WorkspaceTarget,
   documents: DocumentAttachment[] | undefined
 ): Promise<CloudDocumentMeta[]> {
   if (!Array.isArray(documents) || documents.length === 0) return [];
 
   const limited = documents.slice(0, MAX_DOCUMENTS);
   const metaList: CloudDocumentMeta[] = [];
+  const sharedEmails = sanitizeEmailList(target.sharedEmails);
 
   for (const attachment of limited) {
     const attId = sanitizeId(attachment.id, 'doc');
@@ -219,10 +420,9 @@ async function prepareDocumentsForCloud(
       const totalChunks = Math.min(MAX_CHUNKS, Math.ceil(rawDataUrl.length / CHUNK_SIZE));
       chunkCount = totalChunks;
 
-      // Check chunk 0 first because attachmentChunks are immutable (allow update: if false)
       const firstChunkId = `${attId}_0`;
-      const firstChunkPath = `users/${uid}/attachmentChunks/${firstChunkId}`;
-      const firstChunkRef = doc(db, 'users', uid, 'attachmentChunks', firstChunkId);
+      const firstChunkPath = `users/${target.ownerUid}/attachmentChunks/${firstChunkId}`;
+      const firstChunkRef = doc(db, 'users', target.ownerUid, 'attachmentChunks', firstChunkId);
 
       let alreadyUploaded = false;
       try {
@@ -237,15 +437,16 @@ async function prepareDocumentsForCloud(
           const slice = rawDataUrl.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
           if (!slice) continue;
           const chunkId = `${attId}_${i}`;
-          const chunkPath = `users/${uid}/attachmentChunks/${chunkId}`;
-          const chunkRef = doc(db, 'users', uid, 'attachmentChunks', chunkId);
+          const chunkPath = `users/${target.ownerUid}/attachmentChunks/${chunkId}`;
+          const chunkRef = doc(db, 'users', target.ownerUid, 'attachmentChunks', chunkId);
           try {
             await setDoc(chunkRef, {
-              ownerId: uid,
+              ownerId: target.ownerUid,
               attachmentId: attId,
               chunkIndex: i,
               totalChunks,
               data: slice,
+              sharedEmails,
               createdAt: serverTimestamp(),
               updatedAt: serverTimestamp()
             });
@@ -270,7 +471,7 @@ async function prepareDocumentsForCloud(
 }
 
 export async function fetchAttachmentDataUrl(
-  uid: string,
+  target: WorkspaceTarget,
   attachment: DocumentAttachment
 ): Promise<string> {
   if (attachment.dataUrl && attachment.dataUrl.length > 0) {
@@ -287,9 +488,9 @@ export async function fetchAttachmentDataUrl(
     const parts: string[] = [];
     for (let i = 0; i < expectedCount; i++) {
       const chunkId = `${attId}_${i}`;
-      const chunkPath = `users/${uid}/attachmentChunks/${chunkId}`;
+      const chunkPath = `users/${target.ownerUid}/attachmentChunks/${chunkId}`;
       try {
-        const snap = await getDoc(doc(db, 'users', uid, 'attachmentChunks', chunkId));
+        const snap = await getDoc(doc(db, 'users', target.ownerUid, 'attachmentChunks', chunkId));
         if (snap.exists()) {
           const data = snap.data();
           if (typeof data.data === 'string') {
@@ -307,14 +508,17 @@ export async function fetchAttachmentDataUrl(
     return fullUrl;
   }
 
-  // Fallback query if chunkCount metadata was omitted
-  const colPath = `users/${uid}/attachmentChunks`;
+  const colPath = `users/${target.ownerUid}/attachmentChunks`;
   try {
-    const q = query(
-      collection(db, 'users', uid, 'attachmentChunks'),
-      where('ownerId', '==', uid),
-      where('attachmentId', '==', attId)
-    );
+    const baseCol = collection(db, 'users', target.ownerUid, 'attachmentChunks');
+    const q =
+      target.ownerUid === target.viewerUid
+        ? query(baseCol, where('ownerId', '==', target.ownerUid), where('attachmentId', '==', attId))
+        : query(
+            baseCol,
+            where('sharedEmails', 'array-contains', target.viewerEmail.trim().toLowerCase()),
+            where('attachmentId', '==', attId)
+          );
     const snaps = await getDocs(q);
     const chunks = snaps.docs
       .map((d) => d.data() as { chunkIndex: number; data: string })
@@ -330,7 +534,7 @@ export async function fetchAttachmentDataUrl(
 }
 
 export async function deleteAttachmentChunks(
-  uid: string,
+  ownerUid: string,
   documents: DocumentAttachment[] | undefined
 ): Promise<void> {
   if (!Array.isArray(documents) || documents.length === 0) return;
@@ -341,7 +545,7 @@ export async function deleteAttachmentChunks(
     for (let i = 0; i < count; i++) {
       const chunkId = `${attId}_${i}`;
       try {
-        await deleteDoc(doc(db, 'users', uid, 'attachmentChunks', chunkId));
+        await deleteDoc(doc(db, 'users', ownerUid, 'attachmentChunks', chunkId));
       } catch {
         // Ignore if chunk already removed
       }
@@ -435,7 +639,7 @@ function docToHolidayDuty(data: Record<string, unknown>, docId: string): Holiday
   };
 }
 
-// ==================== REAL-TIME SUBSCRIPTIONS ====================
+// ==================== REAL-TIME SUBSCRIPTIONS & SERVER REFRESH ====================
 
 export interface FirestoreSyncCallbacks {
   onAgendas: (items: AgendaItem[]) => void;
@@ -445,16 +649,16 @@ export interface FirestoreSyncCallbacks {
 }
 
 export function subscribeUserCollections(
-  uid: string,
+  target: WorkspaceTarget,
   callbacks: FirestoreSyncCallbacks
 ): () => void {
-  const agendasPath = `users/${uid}/agendas`;
-  const journalsPath = `users/${uid}/journals`;
-  const dutiesPath = `users/${uid}/holidayDuties`;
+  const agendasPath = `users/${target.ownerUid}/agendas`;
+  const journalsPath = `users/${target.ownerUid}/journals`;
+  const dutiesPath = `users/${target.ownerUid}/holidayDuties`;
 
-  const agendasQuery = query(collection(db, 'users', uid, 'agendas'), where('ownerId', '==', uid));
-  const journalsQuery = query(collection(db, 'users', uid, 'journals'), where('ownerId', '==', uid));
-  const dutiesQuery = query(collection(db, 'users', uid, 'holidayDuties'), where('ownerId', '==', uid));
+  const agendasQuery = buildCollectionQuery(target, 'agendas');
+  const journalsQuery = buildCollectionQuery(target, 'journals');
+  const dutiesQuery = buildCollectionQuery(target, 'holidayDuties');
 
   const unsubAgendas = onSnapshot(
     agendasQuery,
@@ -511,21 +715,21 @@ export function subscribeUserCollections(
   };
 }
 
-export async function fetchAllUserCollectionsOnce(uid: string): Promise<{
+export async function fetchAllUserCollectionsFromServer(target: WorkspaceTarget): Promise<{
   agendas: AgendaItem[];
   journals: DailyJournalEntry[];
   holidayDuties: HolidayDutyEntry[];
 }> {
-  const agendasPath = `users/${uid}/agendas`;
-  const journalsPath = `users/${uid}/journals`;
-  const dutiesPath = `users/${uid}/holidayDuties`;
+  const agendasPath = `users/${target.ownerUid}/agendas`;
+  const journalsPath = `users/${target.ownerUid}/journals`;
+  const dutiesPath = `users/${target.ownerUid}/holidayDuties`;
 
   let agendas: AgendaItem[] = [];
   let journals: DailyJournalEntry[] = [];
   let holidayDuties: HolidayDutyEntry[] = [];
 
   try {
-    const snap = await getDocs(query(collection(db, 'users', uid, 'agendas'), where('ownerId', '==', uid)));
+    const snap = await getDocsFromServer(buildCollectionQuery(target, 'agendas'));
     agendas = snap.docs
       .map((d) => docToAgenda(d.data() as Record<string, unknown>, d.id))
       .sort((a, b) => `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`));
@@ -534,7 +738,7 @@ export async function fetchAllUserCollectionsOnce(uid: string): Promise<{
   }
 
   try {
-    const snap = await getDocs(query(collection(db, 'users', uid, 'journals'), where('ownerId', '==', uid)));
+    const snap = await getDocsFromServer(buildCollectionQuery(target, 'journals'));
     journals = snap.docs
       .map((d) => docToJournal(d.data() as Record<string, unknown>, d.id))
       .sort((a, b) => `${b.date}T${b.time}`.localeCompare(`${a.date}T${a.time}`));
@@ -543,7 +747,7 @@ export async function fetchAllUserCollectionsOnce(uid: string): Promise<{
   }
 
   try {
-    const snap = await getDocs(query(collection(db, 'users', uid, 'holidayDuties'), where('ownerId', '==', uid)));
+    const snap = await getDocsFromServer(buildCollectionQuery(target, 'holidayDuties'));
     holidayDuties = snap.docs
       .map((d) => docToHolidayDuty(d.data() as Record<string, unknown>, d.id))
       .sort((a, b) => a.date.localeCompare(b.date));
@@ -556,14 +760,20 @@ export async function fetchAllUserCollectionsOnce(uid: string): Promise<{
 
 // ==================== CRUD OPERATIONS ====================
 
-export async function saveAgendaToFirestore(uid: string, agenda: AgendaItem): Promise<void> {
+export async function saveAgendaToFirestore(
+  target: WorkspaceTarget,
+  agenda: AgendaItem,
+  options?: { skipExisting?: boolean }
+): Promise<void> {
   const safeId = sanitizeId(agenda.id, 'ag');
-  const path = `users/${uid}/agendas/${safeId}`;
-  const agendaRef = doc(db, 'users', uid, 'agendas', safeId);
+  const path = `users/${target.ownerUid}/agendas/${safeId}`;
+  const agendaRef = doc(db, 'users', target.ownerUid, 'agendas', safeId);
 
-  const cloudDocs = await prepareDocumentsForCloud(uid, agenda.documents);
+  const cloudDocs = await prepareDocumentsForCloud(target, agenda.documents);
+  const sharedEmails = sanitizeEmailList(target.sharedEmails);
+  const isOwner = target.ownerUid === target.viewerUid;
 
-  const editablePayload = {
+  const baseEditablePayload = {
     title: clampString(agenda.title, 300, 'Agenda Pimpinan'),
     category: clampString(agenda.category, 80, 'Rapat Koordinasi'),
     leader: clampString(agenda.leader, 80, 'Pimpinan Utama'),
@@ -586,12 +796,17 @@ export async function saveAgendaToFirestore(uid: string, agenda: AgendaItem): Pr
   try {
     const existing = await getDoc(agendaRef);
     if (existing.exists()) {
-      await updateDoc(agendaRef, editablePayload);
+      if (options?.skipExisting) return;
+      const updatePayload = isOwner
+        ? { ...baseEditablePayload, sharedEmails }
+        : baseEditablePayload;
+      await updateDoc(agendaRef, updatePayload);
     } else {
       await setDoc(agendaRef, {
         id: safeId,
-        ownerId: uid,
-        ...editablePayload,
+        ownerId: target.ownerUid,
+        ...baseEditablePayload,
+        sharedEmails,
         createdAt: serverTimestamp()
       });
     }
@@ -601,13 +816,13 @@ export async function saveAgendaToFirestore(uid: string, agenda: AgendaItem): Pr
 }
 
 export async function updateAgendaStatusInFirestore(
-  uid: string,
+  ownerUid: string,
   agendaId: string,
   status: AgendaStatus
 ): Promise<void> {
   const safeId = sanitizeId(agendaId, 'ag');
-  const path = `users/${uid}/agendas/${safeId}`;
-  const agendaRef = doc(db, 'users', uid, 'agendas', safeId);
+  const path = `users/${ownerUid}/agendas/${safeId}`;
+  const agendaRef = doc(db, 'users', ownerUid, 'agendas', safeId);
 
   try {
     await updateDoc(agendaRef, {
@@ -620,13 +835,13 @@ export async function updateAgendaStatusInFirestore(
 }
 
 export async function updateAgendaReminderInFirestore(
-  uid: string,
+  ownerUid: string,
   agendaId: string,
   reminder: ReminderConfig
 ): Promise<void> {
   const safeId = sanitizeId(agendaId, 'ag');
-  const path = `users/${uid}/agendas/${safeId}`;
-  const agendaRef = doc(db, 'users', uid, 'agendas', safeId);
+  const path = `users/${ownerUid}/agendas/${safeId}`;
+  const agendaRef = doc(db, 'users', ownerUid, 'agendas', safeId);
 
   try {
     await updateDoc(agendaRef, {
@@ -639,28 +854,34 @@ export async function updateAgendaReminderInFirestore(
 }
 
 export async function deleteAgendaFromFirestore(
-  uid: string,
+  ownerUid: string,
   agendaId: string,
   documents?: DocumentAttachment[]
 ): Promise<void> {
   const safeId = sanitizeId(agendaId, 'ag');
-  const path = `users/${uid}/agendas/${safeId}`;
+  const path = `users/${ownerUid}/agendas/${safeId}`;
   try {
-    await deleteDoc(doc(db, 'users', uid, 'agendas', safeId));
+    await deleteDoc(doc(db, 'users', ownerUid, 'agendas', safeId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
-  await deleteAttachmentChunks(uid, documents);
+  await deleteAttachmentChunks(ownerUid, documents);
 }
 
-export async function saveJournalToFirestore(uid: string, journal: DailyJournalEntry): Promise<void> {
+export async function saveJournalToFirestore(
+  target: WorkspaceTarget,
+  journal: DailyJournalEntry,
+  options?: { skipExisting?: boolean }
+): Promise<void> {
   const safeId = sanitizeId(journal.id, 'jrn');
-  const path = `users/${uid}/journals/${safeId}`;
-  const journalRef = doc(db, 'users', uid, 'journals', safeId);
+  const path = `users/${target.ownerUid}/journals/${safeId}`;
+  const journalRef = doc(db, 'users', target.ownerUid, 'journals', safeId);
 
-  const cloudDocs = await prepareDocumentsForCloud(uid, journal.documents);
+  const cloudDocs = await prepareDocumentsForCloud(target, journal.documents);
+  const sharedEmails = sanitizeEmailList(target.sharedEmails);
+  const isOwner = target.ownerUid === target.viewerUid;
 
-  const editablePayload = {
+  const baseEditablePayload = {
     date: sanitizeDate(journal.date),
     time: sanitizeTime(journal.time, '08:00'),
     title: clampString(journal.title, 300, 'Jurnal Kegiatan'),
@@ -680,12 +901,17 @@ export async function saveJournalToFirestore(uid: string, journal: DailyJournalE
   try {
     const existing = await getDoc(journalRef);
     if (existing.exists()) {
-      await updateDoc(journalRef, editablePayload);
+      if (options?.skipExisting) return;
+      const updatePayload = isOwner
+        ? { ...baseEditablePayload, sharedEmails }
+        : baseEditablePayload;
+      await updateDoc(journalRef, updatePayload);
     } else {
       await setDoc(journalRef, {
         id: safeId,
-        ownerId: uid,
-        ...editablePayload,
+        ownerId: target.ownerUid,
+        ...baseEditablePayload,
+        sharedEmails,
         createdAt: serverTimestamp()
       });
     }
@@ -695,29 +921,35 @@ export async function saveJournalToFirestore(uid: string, journal: DailyJournalE
 }
 
 export async function deleteJournalFromFirestore(
-  uid: string,
+  ownerUid: string,
   journalId: string,
   documents?: DocumentAttachment[]
 ): Promise<void> {
   const safeId = sanitizeId(journalId, 'jrn');
-  const path = `users/${uid}/journals/${safeId}`;
+  const path = `users/${ownerUid}/journals/${safeId}`;
   try {
-    await deleteDoc(doc(db, 'users', uid, 'journals', safeId));
+    await deleteDoc(doc(db, 'users', ownerUid, 'journals', safeId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
-  await deleteAttachmentChunks(uid, documents);
+  await deleteAttachmentChunks(ownerUid, documents);
 }
 
-export async function saveHolidayDutyToFirestore(uid: string, duty: HolidayDutyEntry): Promise<void> {
+export async function saveHolidayDutyToFirestore(
+  target: WorkspaceTarget,
+  duty: HolidayDutyEntry,
+  options?: { skipExisting?: boolean }
+): Promise<void> {
   const safeId = sanitizeId(duty.id, 'piket');
-  const path = `users/${uid}/holidayDuties/${safeId}`;
-  const dutyRef = doc(db, 'users', uid, 'holidayDuties', safeId);
+  const path = `users/${target.ownerUid}/holidayDuties/${safeId}`;
+  const dutyRef = doc(db, 'users', target.ownerUid, 'holidayDuties', safeId);
 
   const coordinatorName = clampString(duty.coordinatorName, 150, 'Koordinator Piket');
   const coordinatorPhone = clampString(duty.coordinatorPhone, 40, '');
+  const sharedEmails = sanitizeEmailList(target.sharedEmails);
+  const isOwner = target.ownerUid === target.viewerUid;
 
-  const editablePayload = {
+  const baseEditablePayload = {
     date: sanitizeDate(duty.date),
     holidayName: clampString(duty.holidayName, 200, 'Piket Hari Libur'),
     dayType: VALID_DAY_TYPES.includes(duty.dayType) ? duty.dayType : 'Akhir Pekan (Sabtu/Minggu)',
@@ -733,12 +965,17 @@ export async function saveHolidayDutyToFirestore(uid: string, duty: HolidayDutyE
   try {
     const existing = await getDoc(dutyRef);
     if (existing.exists()) {
-      await updateDoc(dutyRef, editablePayload);
+      if (options?.skipExisting) return;
+      const updatePayload = isOwner
+        ? { ...baseEditablePayload, sharedEmails }
+        : baseEditablePayload;
+      await updateDoc(dutyRef, updatePayload);
     } else {
       await setDoc(dutyRef, {
         id: safeId,
-        ownerId: uid,
-        ...editablePayload,
+        ownerId: target.ownerUid,
+        ...baseEditablePayload,
+        sharedEmails,
         createdAt: serverTimestamp()
       });
     }
@@ -748,39 +985,55 @@ export async function saveHolidayDutyToFirestore(uid: string, duty: HolidayDutyE
 }
 
 export async function batchAddHolidayDutiesToFirestore(
-  uid: string,
+  target: WorkspaceTarget,
   duties: HolidayDutyEntry[]
 ): Promise<void> {
   for (const duty of duties) {
-    await saveHolidayDutyToFirestore(uid, duty);
+    await saveHolidayDutyToFirestore(target, duty);
   }
 }
 
-export async function deleteHolidayDutyFromFirestore(uid: string, dutyId: string): Promise<void> {
+export async function deleteHolidayDutyFromFirestore(ownerUid: string, dutyId: string): Promise<void> {
   const safeId = sanitizeId(dutyId, 'piket');
-  const path = `users/${uid}/holidayDuties/${safeId}`;
+  const path = `users/${ownerUid}/holidayDuties/${safeId}`;
   try {
-    await deleteDoc(doc(db, 'users', uid, 'holidayDuties', safeId));
+    await deleteDoc(doc(db, 'users', ownerUid, 'holidayDuties', safeId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
 }
 
 export async function uploadDatasetToFirestore(
-  uid: string,
+  target: WorkspaceTarget,
   data: {
     agendas: AgendaItem[];
     journals: DailyJournalEntry[];
     holidayDuties: HolidayDutyEntry[];
-  }
+  },
+  options?: { skipExisting?: boolean; bestEffort?: boolean }
 ): Promise<void> {
   for (const agenda of data.agendas) {
-    await saveAgendaToFirestore(uid, agenda);
+    try {
+      await saveAgendaToFirestore(target, agenda, options);
+    } catch (err) {
+      if (!options?.skipExisting && !options?.bestEffort) throw err;
+      console.warn('Melewati unggah agenda lokal bermasalah:', agenda.id, err);
+    }
   }
   for (const journal of data.journals) {
-    await saveJournalToFirestore(uid, journal);
+    try {
+      await saveJournalToFirestore(target, journal, options);
+    } catch (err) {
+      if (!options?.skipExisting && !options?.bestEffort) throw err;
+      console.warn('Melewati unggah jurnal lokal bermasalah:', journal.id, err);
+    }
   }
   for (const duty of data.holidayDuties) {
-    await saveHolidayDutyToFirestore(uid, duty);
+    try {
+      await saveHolidayDutyToFirestore(target, duty, options);
+    } catch (err) {
+      if (!options?.skipExisting && !options?.bestEffort) throw err;
+      console.warn('Melewati unggah piket lokal bermasalah:', duty.id, err);
+    }
   }
 }

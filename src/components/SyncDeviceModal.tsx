@@ -10,7 +10,12 @@ import {
   AlertCircle,
   LogIn,
   LogOut,
-  Cloud
+  Cloud,
+  Copy,
+  Check,
+  UserPlus,
+  Trash2,
+  Link2
 } from 'lucide-react';
 import { AgendaItem, DailyJournalEntry, HolidayDutyEntry } from '../types/agenda';
 
@@ -21,13 +26,20 @@ interface SyncDeviceModalProps {
   journals: DailyJournalEntry[];
   holidayDuties: HolidayDutyEntry[];
   isSyncing: boolean;
+  userUid: string | null;
   userEmail: string | null;
   userDisplayName: string | null;
+  activeWorkspaceOwnerUid: string | null;
+  activeWorkspaceOwnerEmail: string | null;
+  sharedEmails: string[];
   isAuthLoading: boolean;
   onSignInGoogle: () => Promise<void>;
   onSignOut: () => Promise<void>;
   onManualSync: () => Promise<{ ok: boolean; message: string }>;
   onUploadLocalToCloud: () => Promise<{ ok: boolean; message: string }>;
+  onUpdateSharedEmails: (emails: string[]) => Promise<{ ok: boolean; message: string }>;
+  onJoinWorkspace: (ownerUid: string) => Promise<{ ok: boolean; message: string }>;
+  onLeaveSharedWorkspace: () => void;
   onImportBackup: (data: {
     agendas: AgendaItem[];
     journals: DailyJournalEntry[];
@@ -42,20 +54,98 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
   journals,
   holidayDuties,
   isSyncing,
+  userUid,
   userEmail,
   userDisplayName,
+  activeWorkspaceOwnerUid,
+  activeWorkspaceOwnerEmail,
+  sharedEmails,
   isAuthLoading,
   onSignInGoogle,
   onSignOut,
   onManualSync,
   onUploadLocalToCloud,
+  onUpdateSharedEmails,
+  onJoinWorkspace,
+  onLeaveSharedWorkspace,
   onImportBackup
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [newEmailInput, setNewEmailInput] = useState('');
+  const [joinWorkspaceInput, setJoinWorkspaceInput] = useState('');
+  const [isUpdatingAccess, setIsUpdatingAccess] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   if (!isOpen) return null;
+
+  const isOwner = Boolean(userUid && activeWorkspaceOwnerUid && userUid === activeWorkspaceOwnerUid);
+  const shareUrl =
+    typeof window !== 'undefined' && activeWorkspaceOwnerUid
+      ? `${window.location.origin}/?workspace=${encodeURIComponent(activeWorkspaceOwnerUid)}`
+      : '';
+
+  const handleCopyShareLink = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    } catch {
+      setFeedback({ type: 'error', text: 'Gagal menyalin tautan. Salin langsung dari kotak tautan.' });
+    }
+  };
+
+  const handleAddSharedEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = newEmailInput.trim().toLowerCase();
+    if (!cleaned || !cleaned.includes('@')) {
+      setFeedback({ type: 'error', text: 'Masukkan alamat email Google yang valid (contoh: nama@gmail.com).' });
+      return;
+    }
+    if (sharedEmails.includes(cleaned)) {
+      setFeedback({ type: 'error', text: 'Email tersebut sudah terdaftar dalam daftar akses.' });
+      return;
+    }
+    setIsUpdatingAccess(true);
+    setFeedback(null);
+    const result = await onUpdateSharedEmails([...sharedEmails, cleaned]);
+    setFeedback({ type: result.ok ? 'success' : 'error', text: result.message });
+    if (result.ok) setNewEmailInput('');
+    setIsUpdatingAccess(false);
+  };
+
+  const handleRemoveSharedEmail = async (emailToRemove: string) => {
+    setIsUpdatingAccess(true);
+    setFeedback(null);
+    const next = sharedEmails.filter((e) => e !== emailToRemove);
+    const result = await onUpdateSharedEmails(next);
+    setFeedback({ type: result.ok ? 'success' : 'error', text: result.message });
+    setIsUpdatingAccess(false);
+  };
+
+  const handleJoinWorkspaceSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const raw = joinWorkspaceInput.trim();
+    if (!raw) return;
+    // Allow pasting either the full link (?workspace=...) or the raw workspace ID
+    let targetId = raw;
+    try {
+      if (raw.startsWith('http://') || raw.startsWith('https://')) {
+        const parsed = new URL(raw);
+        targetId = parsed.searchParams.get('workspace') || raw;
+      }
+    } catch {
+      // treat as raw ID
+    }
+    setIsUpdatingAccess(true);
+    setFeedback(null);
+    const result = await onJoinWorkspace(targetId);
+    setFeedback({ type: result.ok ? 'success' : 'error', text: result.message });
+    if (result.ok) setJoinWorkspaceInput('');
+    setIsUpdatingAccess(false);
+  };
 
   const handleSignIn = async () => {
     setFeedback(null);
@@ -68,7 +158,7 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
     } catch {
       setFeedback({
         type: 'error',
-        text: 'Login Google dibatalkan atau gagal. Silakan coba lagi.'
+        text: 'Login Google dibatalkan atau pop-up diblokir browser. Izinkan pop-up lalu coba lagi.'
       });
     }
   };
@@ -76,10 +166,6 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
   const handleSignOut = async () => {
     setFeedback(null);
     await onSignOut();
-    setFeedback({
-      type: 'success',
-      text: 'Berhasil keluar dari akun Google.'
-    });
   };
 
   const handleSyncNow = async () => {
@@ -163,11 +249,11 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden"
+        className="w-full max-w-xl max-h-[90vh] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 bg-slate-900 text-white">
+        <div className="flex items-center justify-between px-5 py-4 bg-slate-900 text-white shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="flex items-center gap-1 p-2 rounded-xl bg-teal-500/20 text-teal-300 border border-teal-400/30">
               <Smartphone className="w-4 h-4" />
@@ -176,7 +262,7 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
             <div>
               <h3 className="font-bold text-sm sm:text-base">Sinkronisasi Cloud HP &amp; Komputer</h3>
               <p className="text-[11px] text-slate-400">
-                Database permanen real-time lintas perangkat
+                Pastikan HP dan Komputer terhubung ke akun atau ruang kerja yang sama
               </p>
             </div>
           </div>
@@ -190,7 +276,7 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
         </div>
 
         {/* Body */}
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 overflow-y-auto">
           {feedback && (
             <div
               className={`flex items-start gap-2.5 p-3 rounded-xl text-xs font-medium border ${
@@ -208,16 +294,16 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
             </div>
           )}
 
-          {/* 1. Cloud Account Sync */}
+          {/* 1. Active Cloud Account */}
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
             <div className="flex items-start gap-2.5">
               <div className="p-2 rounded-lg bg-teal-100 text-teal-700 shrink-0 mt-0.5">
                 <Cloud className="w-4 h-4" />
               </div>
               <div>
-                <h4 className="text-sm font-bold text-slate-900">1. Sinkronisasi Otomatis Akun Google</h4>
+                <h4 className="text-sm font-bold text-slate-900">1. Akun Cloud Real-Time (Cara Paling Mudah)</h4>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Masuk dengan <strong>akun Google yang sama</strong> di HP dan Komputer agar seluruh agenda, jurnal harian, piket, dan lampiran otomatis sama secara real-time.
+                  Masuk dengan <strong>akun Google yang sama persis</strong> di HP dan Komputer. Setiap perubahan langsung sinkron otomatis.
                 </p>
               </div>
             </div>
@@ -226,7 +312,9 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
               <div className="space-y-2.5">
                 <div className="flex items-center justify-between gap-2 bg-emerald-50 border border-emerald-200 rounded-xl px-3.5 py-2.5">
                   <div className="min-w-0">
-                    <p className="text-[11px] font-semibold text-emerald-700">Terhubung ke Cloud Real-Time</p>
+                    <p className="text-[11px] font-semibold text-emerald-700">
+                      {isOwner ? 'Akun Google Aktif (Ruang Kerja Sendiri)' : `Terhubung ke Ruang Kerja: ${activeWorkspaceOwnerEmail || activeWorkspaceOwnerUid}`}
+                    </p>
                     <p className="text-xs font-bold text-slate-900 truncate">
                       {userDisplayName ? `${userDisplayName} (${userEmail})` : userEmail}
                     </p>
@@ -237,9 +325,19 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-xs font-semibold shrink-0 transition"
                   >
                     <LogOut className="w-3.5 h-3.5" />
-                    <span>Keluar</span>
+                    <span>Ganti Akun</span>
                   </button>
                 </div>
+
+                {!isOwner && (
+                  <button
+                    type="button"
+                    onClick={onLeaveSharedWorkspace}
+                    className="w-full px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-semibold transition"
+                  >
+                    Kembali ke Ruang Kerja Pribadi ({userEmail})
+                  </button>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <button
@@ -249,7 +347,7 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
                     className="inline-flex items-center justify-center gap-2 px-3.5 py-2.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white rounded-xl text-xs font-semibold shadow-sm transition"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                    <span>{isSyncing ? 'Menyinkronkan...' : 'Tarik Data Cloud'}</span>
+                    <span>{isSyncing ? 'Menyinkronkan...' : 'Tarik Data Server Sekarang'}</span>
                   </button>
 
                   <button
@@ -259,7 +357,7 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
                     className="inline-flex items-center justify-center gap-2 px-3.5 py-2.5 bg-white hover:bg-slate-100 disabled:opacity-60 text-slate-800 border border-slate-300 rounded-xl text-xs font-semibold transition"
                   >
                     <Upload className="w-3.5 h-3.5 text-teal-600" />
-                    <span>Unggah Data Perangkat Ini</span>
+                    <span>Kirim Data Perangkat Ini</span>
                   </button>
                 </div>
               </div>
@@ -276,10 +374,111 @@ export const SyncDeviceModal: React.FC<SyncDeviceModalProps> = ({
             )}
           </div>
 
-          {/* 2. File Export/Import Backup */}
+          {/* 2. Multi-Account HP <-> PC Workspace Linking */}
+          {userEmail && (
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+              <div className="flex items-start gap-2.5">
+                <div className="p-2 rounded-lg bg-blue-100 text-blue-700 shrink-0 mt-0.5">
+                  <Link2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900">2. Hubungkan Jika Email HP Berbeda dengan Komputer</h4>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Jika HP menggunakan Gmail lain (atau untuk staf tim), tambahkan email HP di sini lalu buka tautan penghubung di HP.
+                  </p>
+                </div>
+              </div>
+
+              {isOwner && (
+                <div className="space-y-2.5">
+                  <form onSubmit={handleAddSharedEmail} className="flex gap-2">
+                    <input
+                      type="email"
+                      value={newEmailInput}
+                      onChange={(e) => setNewEmailInput(e.target.value)}
+                      placeholder="Masukkan email Gmail di HP (mis. nama@gmail.com)"
+                      className="flex-1 px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isUpdatingAccess}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-semibold shrink-0 transition"
+                    >
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>Izinkan</span>
+                    </button>
+                  </form>
+
+                  {sharedEmails.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] font-semibold text-slate-600">Email HP / Tim yang Diizinkan:</p>
+                      <div className="space-y-1">
+                        {sharedEmails.map((em) => (
+                          <div
+                            key={em}
+                            className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-xs"
+                          >
+                            <span className="font-medium text-slate-800 truncate">{em}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveSharedEmail(em)}
+                              disabled={isUpdatingAccess}
+                              className="p-1 text-slate-400 hover:text-red-600 rounded transition"
+                              title="Cabut akses email ini"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {shareUrl && (
+                    <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-2">
+                      <span className="text-[11px] text-slate-600 truncate flex-1 font-mono">{shareUrl}</span>
+                      <button
+                        type="button"
+                        onClick={handleCopyShareLink}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold shrink-0 transition"
+                      >
+                        {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedLink ? 'Tersalin' : 'Salin Tautan HP'}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Join another workspace */}
+              <form onSubmit={handleJoinWorkspaceSubmit} className="pt-2 border-t border-slate-200 space-y-2">
+                <label className="block text-[11px] font-semibold text-slate-700">
+                  Atau tempel Tautan / ID Ruang Kerja dari Komputer di sini:
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={joinWorkspaceInput}
+                    onChange={(e) => setJoinWorkspaceInput(e.target.value)}
+                    placeholder="Tempel tautan penghubung atau ID ruang kerja..."
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isUpdatingAccess}
+                    className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-semibold shrink-0 transition"
+                  >
+                    Hubungkan
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* 3. File Export/Import Backup */}
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
             <div>
-              <h4 className="text-sm font-bold text-slate-900">2. Cadangan &amp; Impor Berkas (.json)</h4>
+              <h4 className="text-sm font-bold text-slate-900">3. Cadangan &amp; Impor Berkas (.json)</h4>
               <p className="text-xs text-slate-600 mt-0.5">
                 Simpan arsip cadangan berkala atau impor berkas JSON untuk langsung masuk ke database cloud Anda.
               </p>

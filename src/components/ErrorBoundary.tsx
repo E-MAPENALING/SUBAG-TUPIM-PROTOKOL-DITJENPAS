@@ -1,5 +1,6 @@
 import React from 'react';
-import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, RefreshCw, LogOut } from 'lucide-react';
+import { signOutUser } from '../firebase';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -63,6 +64,17 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     window.location.reload();
   };
 
+  handleRecoverLocal = async (): Promise<void> => {
+    try {
+      localStorage.removeItem('subag_tu_pim_linked_workspace_v1');
+      sessionStorage.setItem('subag_tu_pim_guest_mode_v1', '1');
+      await signOutUser();
+    } catch {
+      // ignore sign-out error during recovery
+    }
+    this.handleReload();
+  };
+
   render() {
     if (this.state.hasError) {
       return (
@@ -81,20 +93,32 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
               </h2>
               <p className="text-sm text-slate-600 leading-relaxed">
                 {this.state.isQuotaError
-                  ? 'Kuota harian database cloud sedang penuh. Silakan coba kembali beberapa saat lagi atau gunakan ekspor berkas JSON.'
+                  ? 'Kuota harian database cloud sedang penuh. Anda tetap dapat masuk menggunakan Mode Lokal atau mencoba kembali nanti.'
                   : this.state.isPermissionError
-                    ? 'Pastikan Anda telah masuk menggunakan akun Google yang terverifikasi agar data dapat disinkronkan secara aman.'
-                    : 'Aplikasi mengalami kendala saat memproses sinkronisasi data. Silakan muat ulang halaman untuk melanjutkan.'}
+                    ? 'Sesi akun Google perlu dimuat ulang atau Anda dapat masuk langsung ke Mode Lokal terlebih dahulu.'
+                    : 'Aplikasi mengalami kendala saat memproses sinkronisasi data. Silakan muat ulang atau masuk melalui Mode Lokal.'}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={this.handleReload}
-              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition w-full"
-            >
-              <RefreshCw className="w-4 h-4" />
-              <span>Muat Ulang Aplikasi</span>
-            </button>
+            <div className="space-y-2.5">
+              <button
+                type="button"
+                onClick={this.handleReload}
+                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition w-full"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Muat Ulang Aplikasi</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void this.handleRecoverLocal();
+                }}
+                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-sm font-semibold transition w-full"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Masuk Mode Lokal (Reset Sesi)</span>
+              </button>
+            </div>
           </div>
         </div>
       );
