@@ -75,6 +75,7 @@ import {
 } from './utils/notifications';
 import { playExecutiveChime } from './utils/audioAlarm';
 import { downloadMonthlyIcsFile } from './utils/calendarSync';
+import { downloadAttachmentAsPdf, downloadJournalEntryPdf } from './utils/pdfExport';
 
 import { Header } from './components/Header';
 import { MonthSelector } from './components/MonthSelector';
@@ -789,6 +790,20 @@ export default function App() {
     }
   };
 
+  // Resolve attachment Data URL from inline payload, local IndexedDB cache, or Firestore chunks
+  const resolveAttachmentDataUrl = useCallback(
+    async (docItem: DocumentAttachment): Promise<string> => {
+      if (docItem.dataUrl && docItem.dataUrl.length > 0) {
+        return docItem.dataUrl;
+      }
+      if (workspaceTarget) {
+        return await fetchAttachmentDataUrl(workspaceTarget, docItem);
+      }
+      return (await getCachedAttachmentDataUrl(docItem.id)) || '';
+    },
+    [workspaceTarget]
+  );
+
   // Lazy-load PDF / Image attachment chunks from Firestore when previewing on another device
   const handlePreviewDocument = useCallback(
     async (docItem: DocumentAttachment) => {
@@ -801,12 +816,7 @@ export default function App() {
       setPreviewingDoc(docItem);
       setIsLoadingDoc(true);
       try {
-        let resolvedUrl = '';
-        if (workspaceTarget) {
-          resolvedUrl = await fetchAttachmentDataUrl(workspaceTarget, docItem);
-        } else {
-          resolvedUrl = (await getCachedAttachmentDataUrl(docItem.id)) || '';
-        }
+        const resolvedUrl = await resolveAttachmentDataUrl(docItem);
         setPreviewingDoc((current) =>
           current && current.id === docItem.id
             ? { ...current, dataUrl: resolvedUrl }
@@ -818,7 +828,70 @@ export default function App() {
         setIsLoadingDoc(false);
       }
     },
-    [workspaceTarget]
+    [resolveAttachmentDataUrl]
+  );
+
+  // Download any attached PDF or photo/image directly as a PDF (hydrating cloud chunks if needed)
+  const handleDownloadDocumentPdf = useCallback(
+    async (
+      docItem: DocumentAttachment,
+      context?: { title?: string; subtitle?: string; date?: string }
+    ) => {
+      try {
+        const resolvedUrl = await resolveAttachmentDataUrl(docItem);
+        if (!resolvedUrl) {
+          setWorkspaceNotice(
+            `Isi berkas "${docItem.name}" belum tersedia di perangkat ini. Pastikan Anda masuk dengan akun Google yang sama dan terhubung ke internet.`
+          );
+          return;
+        }
+        await downloadAttachmentAsPdf(docItem, resolvedUrl, {
+          ...context,
+          logoDataUrl: logoUrl
+        });
+      } catch (err) {
+        console.error('Gagal mengunduh lampiran PDF:', err);
+        setWorkspaceNotice(
+          `Gagal mengunduh PDF untuk "${docItem.name}". Silakan coba lagi.`
+        );
+      }
+    },
+    [resolveAttachmentDataUrl, logoUrl]
+  );
+
+  // Export an entire Daily Journal entry together with all uploaded evidence photos as a single PDF
+  const handleDownloadJournalPdf = useCallback(
+    async (entry: DailyJournalEntry) => {
+      try {
+        const resolvedDocs = await Promise.all(
+          (entry.documents || []).map(async (docItem) => {
+            try {
+              const resolvedUrl = await resolveAttachmentDataUrl(docItem);
+              return {
+                id: docItem.id,
+                name: docItem.name,
+                type: docItem.type,
+                dataUrl: resolvedUrl
+              };
+            } catch {
+              return {
+                id: docItem.id,
+                name: docItem.name,
+                type: docItem.type,
+                dataUrl: ''
+              };
+            }
+          })
+        );
+        await downloadJournalEntryPdf(entry, resolvedDocs, logoUrl);
+      } catch (err) {
+        console.error('Gagal mengunduh PDF Jurnal Harian:', err);
+        setWorkspaceNotice(
+          `Gagal membuat PDF untuk Jurnal "${entry.title}". Silakan coba lagi.`
+        );
+      }
+    },
+    [resolveAttachmentDataUrl, logoUrl]
   );
 
   // Extract all categories and leaders for filters
@@ -1481,6 +1554,7 @@ export default function App() {
                 onPreviewDocument={(doc) => {
                   void handlePreviewDocument(doc);
                 }}
+                onDownloadDocumentPdf={handleDownloadDocumentPdf}
                 onOpenHolidayDutyTab={() => handleViewChange('piket')}
               />
             )}
@@ -1494,6 +1568,7 @@ export default function App() {
                 onPreviewDocument={(doc) => {
                   void handlePreviewDocument(doc);
                 }}
+                onDownloadDocumentPdf={handleDownloadDocumentPdf}
                 onAddNew={() => handleOpenNewModal()}
               />
             )}
@@ -1510,6 +1585,8 @@ export default function App() {
                 onPreviewDocument={(doc) => {
                   void handlePreviewDocument(doc);
                 }}
+                onDownloadDocumentPdf={handleDownloadDocumentPdf}
+                onDownloadJournalPdf={handleDownloadJournalPdf}
               />
             )}
 
@@ -1566,6 +1643,7 @@ export default function App() {
             setIsModalOpen(false);
             setAgendaToEdit(null);
           }}
+          onDownloadDocumentPdf={handleDownloadDocumentPdf}
           agendaToEdit={agendaToEdit}
           initialDate={targetDateForNew}
         />
@@ -1575,6 +1653,7 @@ export default function App() {
       <DocumentViewerModal
         document={previewingDoc}
         isLoading={isLoadingDoc}
+        logoUrl={logoUrl}
         onClose={() => {
           setPreviewingDoc(null);
           setIsLoadingDoc(false);

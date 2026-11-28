@@ -1,19 +1,23 @@
 import React from 'react';
 import { X, Download, ExternalLink, FileText, Image as ImageIcon, ZoomIn, ZoomOut, Loader2 } from 'lucide-react';
 import { DocumentAttachment } from '../types/agenda';
+import { downloadAttachmentAsPdf } from '../utils/pdfExport';
 
 interface DocumentViewerModalProps {
   document: DocumentAttachment | null;
   isLoading?: boolean;
+  logoUrl?: string;
   onClose: () => void;
 }
 
 export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
   document: doc,
   isLoading = false,
+  logoUrl,
   onClose
 }) => {
   const [zoomLevel, setZoomLevel] = React.useState<number>(100);
+  const [isExportingPdf, setIsExportingPdf] = React.useState(false);
 
   if (!doc) return null;
 
@@ -27,7 +31,7 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-  const handleDownload = () => {
+  const handleDownloadOriginal = () => {
     if (!doc.dataUrl) return;
     const link = window.document.createElement('a');
     link.href = doc.dataUrl;
@@ -35,6 +39,21 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
     window.document.body.appendChild(link);
     link.click();
     window.document.body.removeChild(link);
+  };
+
+  const handleDownloadPdf = async () => {
+    if (!doc.dataUrl) return;
+    setIsExportingPdf(true);
+    try {
+      await downloadAttachmentAsPdf(doc, doc.dataUrl, {
+        title: doc.name,
+        logoDataUrl: logoUrl || null
+      });
+    } catch (err) {
+      console.error('Gagal mengunduh PDF:', err);
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   const handleOpenInNewTab = () => {
@@ -103,14 +122,32 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
               <span className="hidden sm:inline">Tab Baru</span>
             </button>
 
+            {!isPdf && (
+              <button
+                onClick={handleDownloadOriginal}
+                disabled={!hasData || isLoading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 transition"
+                title="Unduh Gambar Asli"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">Unduh Asli</span>
+              </button>
+            )}
+
             <button
-              onClick={handleDownload}
-              disabled={!hasData || isLoading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white transition shadow-sm"
-              title="Unduh Berkas"
+              onClick={() => {
+                void handleDownloadPdf();
+              }}
+              disabled={!hasData || isLoading || isExportingPdf}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white transition shadow-sm"
+              title="Download PDF"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Unduh</span>
+              {isExportingPdf ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
+              <span>{isExportingPdf ? 'Memproses...' : 'Download PDF'}</span>
             </button>
 
             <button
@@ -164,7 +201,7 @@ export const DocumentViewerModal: React.FC<DocumentViewerModalProps> = ({
                 Pratinjau langsung tidak tersedia untuk format berkas ini. Silakan unduh berkas untuk membukanya.
               </p>
               <button
-                onClick={handleDownload}
+                onClick={handleDownloadOriginal}
                 className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition"
               >
                 <Download className="w-4 h-4" />

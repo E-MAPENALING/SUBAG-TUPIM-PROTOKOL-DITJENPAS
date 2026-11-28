@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, MapPin, User, Paperclip, 
   Share2, Download, ExternalLink, Shirt, Edit2, Trash2, 
-  CheckCircle2, AlertCircle, FileText, Image as ImageIcon, Video, Star
+  FileText, Image as ImageIcon, Video, Star, Loader2
 } from 'lucide-react';
 import { AgendaItem, AgendaStatus, DocumentAttachment } from '../types/agenda';
 import { generateGoogleCalendarUrl, downloadIcsFile, generateWhatsAppShareText, formatDateIndo } from '../utils/calendarSync';
@@ -13,6 +13,7 @@ interface AgendaListViewProps {
   onDeleteAgenda: (agendaId: string) => void;
   onStatusChange: (agendaId: string, newStatus: AgendaStatus) => void;
   onPreviewDocument: (doc: DocumentAttachment) => void;
+  onDownloadDocumentPdf: (doc: DocumentAttachment, context?: { title?: string; subtitle?: string; date?: string }) => Promise<void>;
   onAddNew: () => void;
 }
 
@@ -22,10 +23,25 @@ export const AgendaListView: React.FC<AgendaListViewProps> = ({
   onDeleteAgenda,
   onStatusChange,
   onPreviewDocument,
+  onDownloadDocumentPdf,
   onAddNew
 }) => {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
   const todayStr = new Date().toISOString().slice(0, 10);
+
+  const handleDownloadPdfClick = async (doc: DocumentAttachment, agenda: AgendaItem) => {
+    setDownloadingDocId(doc.id);
+    try {
+      await onDownloadDocumentPdf(doc, {
+        title: agenda.title,
+        subtitle: `${agenda.leader}: ${agenda.leaderName}`,
+        date: agenda.date
+      });
+    } finally {
+      setDownloadingDocId((curr) => (curr === doc.id ? null : curr));
+    }
+  };
 
   // Group agendas by date
   const groupedAgendas: { [date: string]: AgendaItem[] } = {};
@@ -273,32 +289,31 @@ export const AgendaListView: React.FC<AgendaListViewProps> = ({
                                       </p>
                                     </div>
 
-                                    <div className="flex items-center gap-1 ml-1 border-l border-slate-200 pl-2">
+                                    <div className="flex items-center gap-1.5 ml-1 border-l border-slate-200 pl-2">
                                       <button
+                                        type="button"
                                         onClick={() => onPreviewDocument(doc)}
-                                        className="p-1 text-slate-500 hover:text-blue-600 rounded hover:bg-white transition"
+                                        className="p-1.5 text-slate-500 hover:text-blue-600 rounded-lg hover:bg-white transition"
                                         title="Pratinjau Berkas"
                                       >
                                         <ExternalLink className="w-3.5 h-3.5" />
                                       </button>
-                                      {doc.dataUrl ? (
-                                        <a
-                                          href={doc.dataUrl}
-                                          download={doc.name}
-                                          className="p-1 text-slate-500 hover:text-emerald-600 rounded hover:bg-white transition"
-                                          title="Unduh Berkas"
-                                        >
-                                          <Download className="w-3.5 h-3.5" />
-                                        </a>
-                                      ) : (
-                                        <button
-                                          onClick={() => onPreviewDocument(doc)}
-                                          className="p-1 text-slate-500 hover:text-emerald-600 rounded hover:bg-white transition"
-                                          title="Buka & Unduh Berkas dari Cloud"
-                                        >
-                                          <Download className="w-3.5 h-3.5" />
-                                        </button>
-                                      )}
+                                      <button
+                                        type="button"
+                                        disabled={downloadingDocId === doc.id}
+                                        onClick={() => {
+                                          void handleDownloadPdfClick(doc, item);
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-[11px] font-semibold shadow-2xs transition whitespace-nowrap"
+                                        title={isPdf ? 'Download PDF' : 'Konversi & Download sebagai PDF'}
+                                      >
+                                        {downloadingDocId === doc.id ? (
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                          <Download className="w-3 h-3" />
+                                        )}
+                                        <span>{downloadingDocId === doc.id ? 'Mengunduh...' : 'Download PDF'}</span>
+                                      </button>
                                     </div>
                                   </div>
                                 );

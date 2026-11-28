@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, MapPin, User, Paperclip, 
-  Plus, Star, Share2, Download, ExternalLink, Shirt, ShieldCheck, Phone
+  Plus, Star, Share2, Download, ExternalLink, Shirt, ShieldCheck, Phone, Loader2
 } from 'lucide-react';
 import { AgendaItem, DocumentAttachment, HolidayDutyEntry } from '../types/agenda';
 import { generateGoogleCalendarUrl, downloadIcsFile, generateWhatsAppShareText, formatDateIndo } from '../utils/calendarSync';
@@ -14,6 +14,10 @@ interface CalendarMonthViewProps {
   onSelectAgenda: (agenda: AgendaItem) => void;
   onAddAgendaForDate: (dateStr: string) => void;
   onPreviewDocument: (doc: DocumentAttachment) => void;
+  onDownloadDocumentPdf: (
+    doc: DocumentAttachment,
+    context?: { title?: string; subtitle?: string; date?: string }
+  ) => Promise<void>;
   onOpenHolidayDutyTab: () => void;
 }
 
@@ -27,9 +31,24 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
   onSelectAgenda,
   onAddAgendaForDate,
   onPreviewDocument,
+  onDownloadDocumentPdf,
   onOpenHolidayDutyTab
 }) => {
   const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+
+  const handleDownloadPdfClick = async (doc: DocumentAttachment, item: AgendaItem) => {
+    setDownloadingDocId(doc.id);
+    try {
+      await onDownloadDocumentPdf(doc, {
+        title: item.title,
+        subtitle: `${item.leader}: ${item.leaderName} • ${item.location}`,
+        date: item.date
+      });
+    } finally {
+      setDownloadingDocId((curr) => (curr === doc.id ? null : curr));
+    }
+  };
 
   const todayStr = new Date().toISOString().slice(0, 10);
 
@@ -427,23 +446,48 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
                         )}
                       </div>
 
-                      {/* Attached Documents Quick Pill */}
+                      {/* Attached Documents Quick Actions */}
                       {item.documents && item.documents.length > 0 && (
                         <div className="pt-2 flex flex-wrap items-center gap-2">
                           <span className="text-xs font-semibold text-slate-700 flex items-center gap-1">
                             <Paperclip className="w-3.5 h-3.5 text-purple-600" />
                             Berkas Lampiran:
                           </span>
-                          {item.documents.map((doc) => (
-                            <button
-                              key={doc.id}
-                              onClick={() => onPreviewDocument(doc)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg text-xs font-medium transition"
-                            >
-                              <span className="truncate max-w-[150px]">{doc.name}</span>
-                              <ExternalLink className="w-3 h-3 text-purple-500" />
-                            </button>
-                          ))}
+                          {item.documents.map((doc) => {
+                            const isDownloading = downloadingDocId === doc.id;
+                            return (
+                              <div
+                                key={doc.id}
+                                className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 bg-purple-50 border border-purple-200 rounded-lg text-xs"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => onPreviewDocument(doc)}
+                                  className="inline-flex items-center gap-1 text-purple-700 hover:text-purple-900 font-medium transition"
+                                  title="Pratinjau Dokumen"
+                                >
+                                  <span className="truncate max-w-[150px]">{doc.name}</span>
+                                  <ExternalLink className="w-3 h-3 text-purple-500 shrink-0" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void handleDownloadPdfClick(doc, item);
+                                  }}
+                                  disabled={isDownloading}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-[11px] font-semibold transition shrink-0"
+                                  title="Download PDF"
+                                >
+                                  {isDownloading ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <Download className="w-3 h-3" />
+                                  )}
+                                  <span>{isDownloading ? 'Memuat...' : 'Download PDF'}</span>
+                                </button>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>

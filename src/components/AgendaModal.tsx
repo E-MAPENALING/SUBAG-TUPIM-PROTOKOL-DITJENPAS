@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { 
   X, Upload, FileText, Image as ImageIcon, Trash2, Calendar, 
   Clock, MapPin, User, Shield, Bell, AlertTriangle, Link as LinkIcon,
-  Shirt, CheckCircle2
+  Shirt, CheckCircle2, Download, Loader2
 } from 'lucide-react';
 import { AgendaItem, AgendaCategory, LeaderRole, Priority, AgendaStatus, DocumentAttachment } from '../types/agenda';
 
@@ -11,6 +11,10 @@ interface AgendaModalProps {
   onClose: () => void;
   onSave: (agenda: AgendaItem) => void;
   onDelete?: (agendaId: string) => void;
+  onDownloadDocumentPdf?: (
+    doc: DocumentAttachment,
+    context?: { title?: string; subtitle?: string; date?: string }
+  ) => Promise<void>;
   agendaToEdit?: AgendaItem | null;
   initialDate?: string;
 }
@@ -63,11 +67,13 @@ export const AgendaModal: React.FC<AgendaModalProps> = ({
   onClose,
   onSave,
   onDelete,
+  onDownloadDocumentPdf,
   agendaToEdit,
   initialDate
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
 
   const [title, setTitle] = useState(agendaToEdit?.title || '');
   const [category, setCategory] = useState<AgendaCategory>(agendaToEdit?.category || 'Rapat Koordinasi');
@@ -619,14 +625,44 @@ export const AgendaModal: React.FC<AgendaModalProps> = ({
                         </div>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); removeDocument(doc.id); }}
-                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition shrink-0"
-                        title="Hapus Berkas"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {onDownloadDocumentPdf && (
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              setDownloadingDocId(doc.id);
+                              try {
+                                await onDownloadDocumentPdf(doc, {
+                                  title: title || doc.name,
+                                  subtitle: `${leader}: ${leaderName}`,
+                                  date
+                                });
+                              } finally {
+                                setDownloadingDocId((curr) => (curr === doc.id ? null : curr));
+                              }
+                            }}
+                            disabled={downloadingDocId === doc.id}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-[11px] font-semibold transition disabled:opacity-60"
+                            title="Download PDF"
+                          >
+                            {downloadingDocId === doc.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Download className="w-3 h-3" />
+                            )}
+                            <span>PDF</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); removeDocument(doc.id); }}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition shrink-0"
+                          title="Hapus Berkas"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
