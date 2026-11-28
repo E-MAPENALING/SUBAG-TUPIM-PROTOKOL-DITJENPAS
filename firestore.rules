@@ -438,10 +438,9 @@ service cloud.firestore {
           && isSharedUnitWorkspace(workspaceId)
           && (resource == null || (existing().workspaceId == workspaceId && existing().visibility == 'shared_unit'))
           && workspaceExists(workspaceId);
-        // Pillar 8: Strictly evaluates resource.data with zero get()/exists() in list
+        // Pillar 8: Strictly evaluates resource.data with zero get()/exists() in list (single-field index safe)
         allow list: if isVerifiedUser()
           && isSharedUnitWorkspace(workspaceId)
-          && existing().workspaceId == workspaceId
           && existing().visibility == 'shared_unit';
         allow create: if isVerifiedUser()
           && isValidId(workspaceId)
@@ -497,7 +496,6 @@ service cloud.firestore {
           && workspaceExists(workspaceId);
         allow list: if isVerifiedUser()
           && isSharedUnitWorkspace(workspaceId)
-          && existing().workspaceId == workspaceId
           && existing().visibility == 'shared_unit';
         allow create: if isVerifiedUser()
           && isValidId(workspaceId)
@@ -550,7 +548,6 @@ service cloud.firestore {
           && workspaceExists(workspaceId);
         allow list: if isVerifiedUser()
           && isSharedUnitWorkspace(workspaceId)
-          && existing().workspaceId == workspaceId
           && existing().visibility == 'shared_unit';
         allow create: if isVerifiedUser()
           && isValidId(workspaceId)
@@ -596,7 +593,6 @@ service cloud.firestore {
           && workspaceExists(workspaceId);
         allow list: if isVerifiedUser()
           && isSharedUnitWorkspace(workspaceId)
-          && existing().workspaceId == workspaceId
           && existing().visibility == 'shared_unit';
         allow create: if isVerifiedUser()
           && isValidId(workspaceId)

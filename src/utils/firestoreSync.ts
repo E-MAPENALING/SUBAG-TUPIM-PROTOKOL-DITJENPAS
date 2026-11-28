@@ -177,11 +177,7 @@ function buildSharedCollectionQuery(
   subcollection: 'agendas' | 'journals' | 'holidayDuties'
 ) {
   const colRef = collection(db, 'workspaces', workspaceId, subcollection);
-  return query(
-    colRef,
-    where('workspaceId', '==', workspaceId),
-    where('visibility', '==', SHARED_VISIBILITY)
-  );
+  return query(colRef, where('visibility', '==', SHARED_VISIBILITY));
 }
 
 // ==================== SHARED WORKSPACE PROFILE & LOGO ====================
@@ -270,10 +266,13 @@ export function subscribeSharedWorkspace(
 export async function saveSharedWorkspaceLogo(viewerUid: string, logoDataUrl: string): Promise<void> {
   const path = `workspaces/${SHARED_WORKSPACE_ID}`;
   const wsRef = doc(db, 'workspaces', SHARED_WORKSPACE_ID);
-  const clamped = logoDataUrl ? logoDataUrl.slice(0, 450_000) : '';
+  const safeLogo = logoDataUrl ? logoDataUrl.trim() : '';
+  if (safeLogo.length > 445_000) {
+    throw new Error('Ukuran logo terlalu besar untuk sinkronisasi cloud. Unggah ulang logo agar otomatis dikompresi.');
+  }
   try {
     await updateDoc(wsRef, {
-      customLogo: clamped,
+      customLogo: safeLogo,
       updatedBy: viewerUid,
       updatedAt: serverTimestamp()
     });
@@ -412,15 +411,11 @@ export async function fetchSharedAttachmentDataUrl(
   const colPath = `workspaces/${actor.workspaceId}/attachmentChunks`;
   try {
     const baseCol = collection(db, 'workspaces', actor.workspaceId, 'attachmentChunks');
-    const q = query(
-      baseCol,
-      where('workspaceId', '==', actor.workspaceId),
-      where('visibility', '==', SHARED_VISIBILITY),
-      where('attachmentId', '==', attId)
-    );
+    const q = query(baseCol, where('visibility', '==', SHARED_VISIBILITY));
     const snaps = await getDocs(q);
     const chunks = snaps.docs
-      .map((d) => d.data() as { chunkIndex: number; data: string })
+      .map((d) => d.data() as { attachmentId?: string; chunkIndex: number; data: string })
+      .filter((c) => c.attachmentId === attId)
       .sort((a, b) => a.chunkIndex - b.chunkIndex);
     const fullUrl = chunks.map((c) => c.data).join('');
     if (fullUrl) {
@@ -977,14 +972,14 @@ async function hydrateLegacyAttachments(
 export async function migrateLegacyUserWorkspaceToShared(
   actor: SharedWorkspaceActor,
   currentSharedLogo: string
-): Promise<{ migratedCount: number; migratedLogo: string | null }> {
+): Promise<{ migratedCount: number; migratedLogo: string | null; completed: boolean }> {
   let migratedCount = 0;
   let migratedLogo: string | null = null;
 
   try {
     const legacyProfileSnap = await getDoc(doc(db, 'users', actor.viewerUid));
     if (!legacyProfileSnap.exists()) {
-      return { migratedCount: 0, migratedLogo: null };
+      return { migratedCount: 0, migratedLogo: null, completed: true };
     }
 
     const profileData = legacyProfileSnap.data();
@@ -1038,9 +1033,10 @@ export async function migrateLegacyUserWorkspaceToShared(
         // skip individual item errors
       }
     }
+
+    return { migratedCount, migratedLogo, completed: true };
   } catch (err) {
     console.warn('Migrasi otomatis data lama dilewati:', err);
+    return { migratedCount, migratedLogo, completed: false };
   }
-
-  return { migratedCount, migratedLogo };
 }

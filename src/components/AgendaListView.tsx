@@ -90,7 +90,7 @@ export const AgendaListView: React.FC<AgendaListViewProps> = ({
         return (
           <div key={dateStr} className="space-y-3">
             {/* Date Section Header */}
-            <div className="flex items-center gap-3 lg:sticky lg:top-[120px] z-20 bg-slate-50/95 backdrop-blur-sm py-2">
+            <div className="flex items-center gap-3 sticky top-[52px] z-20 bg-slate-50/95 backdrop-blur-sm py-2">
               <div className={`p-2 rounded-xl text-xs font-bold ${
                 isToday ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-800 text-slate-200'
               }`}>

@@ -143,178 +143,163 @@ export const CalendarMonthView: React.FC<CalendarMonthViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Calendar Grid Container */}
+      {/* Calendar Grid Container — identical layout on Komputer & HP (smooth horizontal swipe on narrow phones) */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        {/* Weekday Header */}
-        <div className="grid grid-cols-7 bg-slate-900 text-white text-xs font-semibold py-3 border-b border-slate-800 text-center">
-          {WEEKDAYS.map((day, idx) => (
-            <div key={day} className={idx >= 5 ? 'text-amber-400' : 'text-slate-200'}>
-              <span className="hidden sm:inline">{day}</span>
-              <span className="sm:hidden">{day.slice(0, 3)}</span>
-            </div>
-          ))}
+        <div className="sm:hidden flex items-center justify-between px-3 py-1.5 bg-slate-800 text-[11px] text-slate-300 border-b border-slate-700">
+          <span>Tampilan Kalender Lengkap (Sama dengan Komputer)</span>
+          <span className="text-amber-300 font-semibold">Geser &larr;&rarr;</span>
         </div>
 
-        {/* Days Grid */}
-        <div className="grid grid-cols-7 auto-rows-fr divide-x divide-y divide-slate-100 bg-slate-100">
-          {/* Trailing Prev Month Days */}
-          {prevMonthCells.map((cell) => {
-            const dayAgendas = agendaMap.get(cell.dateStr) || [];
-            return (
-              <div
-                key={`prev-${cell.dateStr}`}
-                onClick={() => setSelectedDayDate(cell.dateStr)}
-                className="bg-slate-50/60 p-1.5 sm:p-2 min-h-[72px] sm:min-h-[120px] opacity-45 cursor-pointer hover:opacity-80 transition flex flex-col"
-              >
-                <span className="text-xs font-medium text-slate-400">{cell.day}</span>
-                {dayAgendas.length > 0 && (
-                  <span className="text-[10px] text-slate-500 mt-1 font-semibold">
-                    {dayAgendas.length}
-                  </span>
-                )}
-              </div>
-            );
-          })}
+        <div className="overflow-x-auto">
+          <div className="min-w-[680px]">
+            {/* Weekday Header */}
+            <div className="grid grid-cols-7 bg-slate-900 text-white text-xs font-semibold py-3 border-b border-slate-800 text-center">
+              {WEEKDAYS.map((day, idx) => (
+                <div key={day} className={idx >= 5 ? 'text-amber-400' : 'text-slate-200'}>
+                  {day}
+                </div>
+              ))}
+            </div>
 
-          {/* Current Month Days */}
-          {currentMonthCells.map((cell) => {
-            const dayAgendas = agendaMap.get(cell.dateStr) || [];
-            const dayDuty = dutyMap.get(cell.dateStr);
-            const isToday = cell.dateStr === todayStr;
-            const isSelected = cell.dateStr === activeDate;
-            const hasVip = dayAgendas.some((a) => a.priority === 'VIP');
+            {/* Days Grid */}
+            <div className="grid grid-cols-7 auto-rows-fr divide-x divide-y divide-slate-100 bg-slate-100">
+              {/* Trailing Prev Month Days */}
+              {prevMonthCells.map((cell) => {
+                const dayAgendas = agendaMap.get(cell.dateStr) || [];
+                return (
+                  <div
+                    key={`prev-${cell.dateStr}`}
+                    onClick={() => setSelectedDayDate(cell.dateStr)}
+                    className="bg-slate-50/60 p-2 min-h-[115px] sm:min-h-[125px] opacity-45 cursor-pointer hover:opacity-80 transition flex flex-col"
+                  >
+                    <span className="text-xs font-medium text-slate-400">{cell.day}</span>
+                    {dayAgendas.length > 0 && (
+                      <span className="text-[10px] text-slate-500 mt-1 font-semibold">
+                        {dayAgendas.length} agenda
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
 
-            return (
-              <div
-                key={cell.dateStr}
-                onClick={() => setSelectedDayDate(cell.dateStr)}
-                className={`bg-white p-1.5 sm:p-2.5 min-h-[74px] sm:min-h-[135px] cursor-pointer transition flex flex-col relative group ${
-                  isSelected ? 'ring-2 ring-blue-600 ring-inset bg-blue-50/25' : 'hover:bg-slate-50/80'
-                }`}
-              >
-                {/* Cell Header: Date Number & Add Button */}
-                <div className="flex items-center justify-between mb-1 sm:mb-1.5">
-                  <span
-                    className={`inline-flex items-center justify-center text-xs font-bold w-6 h-6 rounded-full transition ${
-                      isToday
-                        ? 'bg-blue-600 text-white shadow-xs'
-                        : isSelected
-                        ? 'bg-slate-900 text-white'
-                        : 'text-slate-700 group-hover:text-blue-600'
+              {/* Current Month Days */}
+              {currentMonthCells.map((cell) => {
+                const dayAgendas = agendaMap.get(cell.dateStr) || [];
+                const dayDuty = dutyMap.get(cell.dateStr);
+                const isToday = cell.dateStr === todayStr;
+                const isSelected = cell.dateStr === activeDate;
+
+                return (
+                  <div
+                    key={cell.dateStr}
+                    onClick={() => setSelectedDayDate(cell.dateStr)}
+                    className={`bg-white p-2 sm:p-2.5 min-h-[120px] sm:min-h-[135px] cursor-pointer transition flex flex-col relative group ${
+                      isSelected ? 'ring-2 ring-blue-600 ring-inset bg-blue-50/25' : 'hover:bg-slate-50/80'
                     }`}
                   >
-                    {cell.day}
-                  </span>
-
-                  <div className="hidden sm:flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onAddAgendaForDate(cell.dateStr);
-                      }}
-                      className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition"
-                      title={`Tambah agenda pada ${cell.day}`}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Mobile Clean Compact Indicators (< sm) */}
-                <div className="sm:hidden flex-1 flex flex-col justify-between gap-1 pt-0.5">
-                  {dayAgendas.length > 0 && (
-                    <div className="space-y-0.5">
+                    {/* Cell Header: Date Number & Add Button */}
+                    <div className="flex items-center justify-between mb-1.5">
                       <span
-                        className={`inline-flex items-center justify-center w-full px-1 py-0.5 rounded text-[9px] font-bold truncate ${
-                          hasVip
-                            ? 'bg-red-100 text-red-800 border border-red-200'
-                            : 'bg-blue-100 text-blue-800 border border-blue-200'
+                        className={`inline-flex items-center justify-center text-xs font-bold w-6 h-6 rounded-full transition ${
+                          isToday
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : isSelected
+                            ? 'bg-slate-900 text-white'
+                            : 'text-slate-700 group-hover:text-blue-600'
                         }`}
                       >
-                        {dayAgendas.length} Agenda
+                        {cell.day}
                       </span>
-                    </div>
-                  )}
-                  {dayDuty && (
-                    <span className="inline-flex items-center justify-center w-full px-1 py-0.5 rounded text-[9px] font-bold bg-teal-50 text-teal-800 border border-teal-200 truncate">
-                      Piket
-                    </span>
-                  )}
-                </div>
 
-                {/* Tablet & Desktop Detailed Event Chips (>= sm) */}
-                <div className="hidden sm:block flex-1 space-y-1 overflow-hidden">
-                  {dayAgendas.slice(0, 3).map((item) => {
-                    const isVip = item.priority === 'VIP';
-                    return (
-                      <div
-                        key={item.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSelectAgenda(item);
-                        }}
-                        className={`px-1.5 py-0.5 rounded-md text-[11px] font-medium border truncate transition flex items-center justify-between gap-1 shadow-2xs hover:scale-[1.02] ${
-                          isVip
-                            ? 'bg-red-50 text-red-900 border-red-200 font-semibold'
-                            : getCategoryColor(item.category)
-                        }`}
-                        title={`${item.startTime} - ${item.title} (${item.leader})`}
-                      >
-                        <div className="flex items-center gap-1 min-w-0 truncate">
-                          {isVip && <Star className="w-2.5 h-2.5 text-red-500 fill-red-500 shrink-0" />}
-                          <span className="font-mono text-[9px] opacity-75 shrink-0">{item.startTime}</span>
-                          <span className="truncate">{item.title}</span>
-                        </div>
-                        {item.documents && item.documents.length > 0 && (
-                          <Paperclip className="w-2.5 h-2.5 text-slate-500 shrink-0" />
-                        )}
+                      <div className="flex items-center gap-1 opacity-70 sm:opacity-0 group-hover:opacity-100 transition">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddAgendaForDate(cell.dateStr);
+                          }}
+                          className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition"
+                          title={`Tambah agenda pada ${cell.day}`}
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
                       </div>
-                    );
-                  })}
-
-                  {dayAgendas.length > 3 && (
-                    <div className="text-[10px] font-semibold text-blue-600 hover:underline pt-0.5 px-1">
-                      +{dayAgendas.length - 3} kegiatan lainnya
                     </div>
-                  )}
 
-                  {/* Holiday Protocol Duty Officer Badge */}
-                  {dayDuty && (
-                    <div
-                      className="mt-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-teal-50 text-teal-800 border border-teal-200 flex items-center gap-1 truncate"
-                      title={`Piket Libur (${dayDuty.holidayName}): ${dayDuty.officers.map((o) => o.name).join(', ')}`}
-                    >
-                      <ShieldCheck className="w-2.5 h-2.5 text-teal-600 shrink-0" />
-                      <span className="truncate">
-                        Piket: {dayDuty.officers[0]?.name || dayDuty.coordinatorName}
-                        {dayDuty.officers.length > 1 ? ` +${dayDuty.officers.length - 1}` : ''}
+                    {/* Identical Detailed Event Chips across Phone, Tablet & Desktop */}
+                    <div className="flex-1 space-y-1 overflow-hidden">
+                      {dayAgendas.slice(0, 3).map((item) => {
+                        const isVip = item.priority === 'VIP';
+                        return (
+                          <div
+                            key={item.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onSelectAgenda(item);
+                            }}
+                            className={`px-1.5 py-0.5 rounded-md text-[11px] font-medium border truncate transition flex items-center justify-between gap-1 shadow-2xs hover:scale-[1.02] ${
+                              isVip
+                                ? 'bg-red-50 text-red-900 border-red-200 font-semibold'
+                                : getCategoryColor(item.category)
+                            }`}
+                            title={`${item.startTime} - ${item.title} (${item.leader})`}
+                          >
+                            <div className="flex items-center gap-1 min-w-0 truncate">
+                              {isVip && <Star className="w-2.5 h-2.5 text-red-500 fill-red-500 shrink-0" />}
+                              <span className="font-mono text-[9px] opacity-75 shrink-0">{item.startTime}</span>
+                              <span className="truncate">{item.title}</span>
+                            </div>
+                            {item.documents && item.documents.length > 0 && (
+                              <Paperclip className="w-2.5 h-2.5 text-slate-500 shrink-0" />
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {dayAgendas.length > 3 && (
+                        <div className="text-[10px] font-semibold text-blue-600 hover:underline pt-0.5 px-1">
+                          +{dayAgendas.length - 3} kegiatan lainnya
+                        </div>
+                      )}
+
+                      {/* Holiday Protocol Duty Officer Badge */}
+                      {dayDuty && (
+                        <div
+                          className="mt-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-teal-50 text-teal-800 border border-teal-200 flex items-center gap-1 truncate"
+                          title={`Piket Libur (${dayDuty.holidayName}): ${dayDuty.officers.map((o) => o.name).join(', ')}`}
+                        >
+                          <ShieldCheck className="w-2.5 h-2.5 text-teal-600 shrink-0" />
+                          <span className="truncate">
+                            Piket: {dayDuty.officers[0]?.name || dayDuty.coordinatorName}
+                            {dayDuty.officers.length > 1 ? ` +${dayDuty.officers.length - 1}` : ''}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Next Month Leading Days */}
+              {nextMonthCells.map((cell) => {
+                const dayAgendas = agendaMap.get(cell.dateStr) || [];
+                return (
+                  <div
+                    key={`next-${cell.dateStr}`}
+                    onClick={() => setSelectedDayDate(cell.dateStr)}
+                    className="bg-slate-50/60 p-2 min-h-[115px] sm:min-h-[125px] opacity-45 cursor-pointer hover:opacity-80 transition flex flex-col"
+                  >
+                    <span className="text-xs font-medium text-slate-400">{cell.day}</span>
+                    {dayAgendas.length > 0 && (
+                      <span className="text-[10px] text-slate-500 mt-1 font-semibold">
+                        {dayAgendas.length} agenda
                       </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Next Month Leading Days */}
-          {nextMonthCells.map((cell) => {
-            const dayAgendas = agendaMap.get(cell.dateStr) || [];
-            return (
-              <div
-                key={`next-${cell.dateStr}`}
-                onClick={() => setSelectedDayDate(cell.dateStr)}
-                className="bg-slate-50/60 p-1.5 sm:p-2 min-h-[72px] sm:min-h-[120px] opacity-45 cursor-pointer hover:opacity-80 transition flex flex-col"
-              >
-                <span className="text-xs font-medium text-slate-400">{cell.day}</span>
-                {dayAgendas.length > 0 && (
-                  <span className="text-[10px] text-slate-500 mt-1 font-semibold">
-                    {dayAgendas.length}
-                  </span>
-                )}
-              </div>
-            );
-          })}
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
 

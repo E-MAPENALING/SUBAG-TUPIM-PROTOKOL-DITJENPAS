@@ -106,7 +106,8 @@ const MONTH_NAMES = [
 ];
 
 const LOCAL_DIRTY_KEY = 'subag_tu_pim_local_dirty_v1';
-const LEGACY_MIGRATED_PREFIX = 'subag_tu_pim_migrated_v2_';
+const LEGACY_MIGRATED_PREFIX = 'subag_tu_pim_migrated_v3_';
+const LOCAL_MERGED_PREFIX = 'subag_tu_pim_local_merged_v3_';
 
 const VIEW_ORDER: ViewMode[] = ['calendar', 'list', 'journal', 'piket', 'dashboard', 'print'];
 
@@ -413,6 +414,9 @@ export default function App() {
       activeActorRef.current = actor;
 
       try {
+        // Capture any locally saved custom logo BEFORE touching localStorage
+        const localLogoBeforeSync = getStoredCustomLogo();
+
         // 1. Ensure shared institutional workspace exists
         const { isNewWorkspace, config } = await ensureSharedWorkspace(signedInUser);
         if (!active) return;
@@ -422,10 +426,6 @@ export default function App() {
           saveCustomLogo(sharedLogo);
           setLogoUrl(sharedLogo);
           setIsCustomLogo(true);
-        } else if (sharedLogo === '') {
-          resetCustomLogo();
-          setLogoUrl(DEFAULT_APP_LOGO);
-          setIsCustomLogo(false);
         }
 
         // 2. Automatically migrate any legacy per-user (/users/{uid}) records + logo once per account
@@ -439,7 +439,7 @@ export default function App() {
         })();
 
         if (!alreadyMigrated) {
-          const { migratedLogo } = await migrateLegacyUserWorkspaceToShared(actor, sharedLogo);
+          const { migratedLogo, completed } = await migrateLegacyUserWorkspaceToShared(actor, sharedLogo);
           if (!active) return;
           if (migratedLogo && migratedLogo.startsWith('data:image/')) {
             sharedLogo = migratedLogo;
@@ -447,46 +447,68 @@ export default function App() {
             setLogoUrl(migratedLogo);
             setIsCustomLogo(true);
           }
+          if (completed) {
+            try {
+              localStorage.setItem(migrationFlagKey, '1');
+            } catch {
+              // ignore
+            }
+          }
+        }
+
+        // 3. Push any custom local IndexedDB items (or unsynced Mode Lokal edits) BEFORE attaching live listeners
+        //    so real agendas/journals/duties created on this device are NEVER lost or overwritten!
+        const localMergedFlagKey = `${LOCAL_MERGED_PREFIX}${signedInUser.uid}`;
+        const alreadyMergedLocal = (() => {
           try {
-            localStorage.setItem(migrationFlagKey, '1');
+            return localStorage.getItem(localMergedFlagKey) === '1';
+          } catch {
+            return false;
+          }
+        })();
+        const dirtyLocal = isLocalDirty();
+
+        if (dirtyLocal || !alreadyMergedLocal) {
+          const customAgendas = localAgendas.filter((a) => !INITIAL_AGENDA_IDS.has(a.id));
+          const customJournals = localJournals.filter((j) => !INITIAL_JOURNAL_IDS.has(j.id));
+          const customDuties = localDuties.filter((d) => !INITIAL_DUTY_IDS.has(d.id));
+
+          if (customAgendas.length > 0 || customJournals.length > 0 || customDuties.length > 0) {
+            await uploadDatasetToSharedWorkspace(
+              actor,
+              {
+                agendas: customAgendas,
+                journals: customJournals,
+                holidayDuties: customDuties
+              },
+              { skipExisting: !dirtyLocal, bestEffort: true }
+            );
+          }
+
+          if (dirtyLocal) {
+            clearLocalDirty();
+          }
+          try {
+            localStorage.setItem(localMergedFlagKey, '1');
           } catch {
             // ignore
           }
         }
 
-        // 3. If user made edits in Local Mode earlier on this device, push them to the shared cloud workspace
-        if (isLocalDirty()) {
-          const customAgendas = localAgendas.filter((a) => !INITIAL_AGENDA_IDS.has(a.id));
-          const customJournals = localJournals.filter((j) => !INITIAL_JOURNAL_IDS.has(j.id));
-          const customDuties = localDuties.filter((d) => !INITIAL_DUTY_IDS.has(d.id));
-          const toPushAgendas = customAgendas.length > 0 ? customAgendas : localAgendas;
-          const toPushJournals = customJournals.length > 0 ? customJournals : localJournals;
-          const toPushDuties = customDuties.length > 0 ? customDuties : localDuties;
-
-          if (toPushAgendas.length > 0 || toPushJournals.length > 0 || toPushDuties.length > 0) {
-            await uploadDatasetToSharedWorkspace(
-              actor,
-              {
-                agendas: toPushAgendas,
-                journals: toPushJournals,
-                holidayDuties: toPushDuties
-              },
-              { bestEffort: true }
-            );
+        // 4. Sync local custom logo to cloud if cloud does not have one yet; otherwise apply default
+        if (!sharedLogo && localLogoBeforeSync && localLogoBeforeSync.startsWith('data:image/')) {
+          try {
+            await saveSharedWorkspaceLogo(signedInUser.uid, localLogoBeforeSync);
+            sharedLogo = localLogoBeforeSync;
+            setLogoUrl(localLogoBeforeSync);
+            setIsCustomLogo(true);
+          } catch (logoErr) {
+            console.warn('Logo lokal belum tersinkron ke cloud:', logoErr);
           }
-          const localLogo = getStoredCustomLogo();
-          if (localLogo && !sharedLogo) {
-            await saveSharedWorkspaceLogo(signedInUser.uid, localLogo).catch(() => {});
-            sharedLogo = localLogo;
-          }
-          clearLocalDirty();
-        } else {
-          // If this browser previously stored a custom logo locally and cloud has none yet, push it once
-          const localLogo = getStoredCustomLogo();
-          if (localLogo && !sharedLogo) {
-            await saveSharedWorkspaceLogo(signedInUser.uid, localLogo).catch(() => {});
-            sharedLogo = localLogo;
-          }
+        } else if (!sharedLogo) {
+          resetCustomLogo();
+          setLogoUrl(DEFAULT_APP_LOGO);
+          setIsCustomLogo(false);
         }
 
         if (!active) return;
@@ -979,28 +1001,36 @@ export default function App() {
     }
   };
 
-  // Explicit push of current device dataset into shared cloud workspace
+  // Explicit push of current device dataset & custom logo into shared cloud workspace
   const handleUploadLocalToCloud = async (): Promise<{ ok: boolean; message: string }> => {
     if (!workspaceActor) {
       return { ok: false, message: 'Silakan masuk dengan akun Google terlebih dahulu.' };
     }
     setIsSyncing(true);
     try {
-      await uploadDatasetToSharedWorkspace(workspaceActor, {
-        agendas,
-        journals,
-        holidayDuties
-      });
+      await uploadDatasetToSharedWorkspace(
+        workspaceActor,
+        {
+          agendas,
+          journals,
+          holidayDuties
+        },
+        { bestEffort: true }
+      );
+      const localLogo = getStoredCustomLogo();
+      if (localLogo && localLogo.startsWith('data:image/')) {
+        await saveSharedWorkspaceLogo(workspaceActor.viewerUid, localLogo).catch(() => {});
+      }
       clearLocalDirty();
       return {
         ok: true,
-        message: `Seluruh data perangkat ini (${agendas.length} agenda, ${journals.length} jurnal, ${holidayDuties.length} piket) berhasil dikirim ke database bersama.`
+        message: `Seluruh data perangkat ini (${agendas.length} agenda, ${journals.length} jurnal, ${holidayDuties.length} piket) & logo berhasil dikirim ke database bersama.`
       };
     } catch (err) {
-      setFatalError(err instanceof Error ? err : new Error(String(err)));
+      console.error('Upload local to cloud error:', err);
       return {
         ok: false,
-        message: 'Gagal mengirim data ke cloud.'
+        message: 'Sebagian data gagal dikirim ke cloud. Periksa koneksi internet Anda lalu coba lagi.'
       };
     } finally {
       setIsSyncing(false);
@@ -1331,13 +1361,27 @@ export default function App() {
                 <span>{isAuthLoading ? 'Membuka Login Google...' : 'Masuk dengan Akun Google'}</span>
               </button>
 
+              {!isInIframe && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleSignInGoogleRedirect();
+                  }}
+                  disabled={isAuthLoading}
+                  className="w-full inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-blue-50 hover:bg-blue-100 disabled:opacity-60 text-blue-800 text-xs font-semibold border border-blue-200 transition"
+                >
+                  <LogIn className="w-3.5 h-3.5" />
+                  <span>Alternatif Login Google (Khusus Browser HP)</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={handleEnterLocalMode}
-                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs sm:text-sm font-semibold border border-slate-200 transition"
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-600 text-xs font-medium border border-slate-200 transition"
               >
-                <span>Masuk Langsung ke Aplikasi (Mode Lokal)</span>
-                <ArrowRight className="w-4 h-4 text-slate-500" />
+                <span>Buka Mode Offline (Data Tidak Sinkron Antar Perangkat)</span>
+                <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
               </button>
             </div>
 
@@ -1409,9 +1453,9 @@ export default function App() {
         {/* Main App Content Container */}
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 overflow-x-clip print:overflow-visible">
           {!user && viewMode !== 'print' && (
-            <div className="mb-4 p-3.5 rounded-xl bg-blue-50 border border-blue-200 text-xs font-medium text-blue-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 no-print">
+            <div className="mb-4 p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-xs font-medium text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3 no-print shadow-xs">
               <span>
-                Anda sedang menggunakan <strong>Mode Lokal</strong> (data tersimpan di perangkat ini). Masuk dengan akun Google kapan saja agar data otomatis sinkron antara HP &amp; Komputer.
+                <strong>Mode Offline Aktif:</strong> Data &amp; logo saat ini hanya tersimpan di browser perangkat ini sehingga <strong>berbeda dengan komputer/HP lain</strong>. Klik <strong>Masuk Google</strong> agar seluruh data &amp; tampilan otomatis 100% sama.
                 {authNotice ? ` — ${authNotice}` : ''}
               </span>
               <button
@@ -1420,10 +1464,10 @@ export default function App() {
                   void handleSignInGoogle().catch(() => {});
                 }}
                 disabled={isAuthLoading}
-                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white font-semibold shrink-0 transition"
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white font-bold shrink-0 transition"
               >
                 <LogIn className="w-3.5 h-3.5 text-amber-400" />
-                <span>{isAuthLoading ? 'Memproses...' : 'Masuk Google'}</span>
+                <span>{isAuthLoading ? 'Memproses...' : 'Masuk Google Sekarang'}</span>
               </button>
             </div>
           )}

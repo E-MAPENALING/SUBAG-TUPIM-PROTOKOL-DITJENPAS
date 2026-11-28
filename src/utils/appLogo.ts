@@ -56,7 +56,7 @@ export function normalizeUploadedLogoFile(file: File): Promise<string> {
       const rawUrl = reader.result as string;
       const img = new Image();
       img.onload = () => {
-        const maxDim = 512;
+        const maxDim = 256;
         const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
         const width = Math.max(1, Math.round(img.width * scale));
         const height = Math.max(1, Math.round(img.height * scale));
@@ -69,7 +69,18 @@ export function normalizeUploadedLogoFile(file: File): Promise<string> {
           return;
         }
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/png'));
+
+        const MAX_CLOUD_LOGO_LEN = 380_000;
+        let output = canvas.toDataURL('image/png');
+        if (output.length > MAX_CLOUD_LOGO_LEN) {
+          const webp = canvas.toDataURL('image/webp', 0.85);
+          if (webp.startsWith('data:image/webp') && webp.length <= MAX_CLOUD_LOGO_LEN) {
+            output = webp;
+          } else {
+            output = canvas.toDataURL('image/jpeg', 0.85);
+          }
+        }
+        resolve(output);
       };
       img.onerror = () => reject(new Error('Berkas bukan gambar yang valid.'));
       img.src = rawUrl;
